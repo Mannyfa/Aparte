@@ -16,6 +16,8 @@ namespace Shortlet.Core.Entities
         
         public decimal TotalPrice { get; set; }
         public decimal ServiceFee { get; set; }
+
+        public string? CheckInCode { get; set; }
         
         // pending, paid, cancelled, completed
         public string Status { get; set; } = "pending"; 

@@ -21,8 +21,10 @@ export default function Navbar() {
           <div className="bg-brand p-1.5 rounded-lg text-white">
             <Home size={20} />
           </div>
-          <span>Nigerian Shortlet</span>
+          <span>APARTEY!</span>
         </Link>
+
+        <Link to="/my-trips">My Trips</Link>
 
         {/* Right Side - Auth Links */}
         <div className="flex items-center gap-4">

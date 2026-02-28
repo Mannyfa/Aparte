@@ -26,6 +26,11 @@ namespace Shortlet.Core.Entities
         public string Status { get; set; } = "pending_approval"; // pending_approval, active, suspended
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+       
+        public List<string> ImageUrls { get; set; } = new List<string>();
+        public List<string> Amenities { get; set; } = new List<string>();
+        public List<string> HouseRules { get; set; } = new List<string>();
+
         public ICollection<PropertyImage> Images { get; set; } = new List<PropertyImage>();
     }
 }

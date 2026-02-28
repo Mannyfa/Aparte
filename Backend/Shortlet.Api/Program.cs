@@ -7,12 +7,19 @@ using Microsoft.OpenApi.Models;
 using Shortlet.Core.Interfaces;
 using Shortlet.Infrastructure.Data;
 using Shortlet.Infrastructure.Services;
+using Shortlet.Api.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. Add Controllers
-builder.Services.AddControllers();
+builder.Services.AddControllers().AddJsonOptions(options =>
+{
+    // This stops the infinite JSON loop!
+    options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
+});
 builder.Services.AddEndpointsApiExplorer();
+
+builder.Services.AddSignalR();
 
 // 2. Configure Swagger to Support JWT Tokens
 builder.Services.AddSwaggerGen(c =>
@@ -61,6 +68,13 @@ builder.Services.AddScoped<Shortlet.Core.Interfaces.IPropertyService, Shortlet.I
 builder.Services.AddHttpClient<Shortlet.Core.Interfaces.IPaystackService, Shortlet.Infrastructure.Services.PaystackService>();
 builder.Services.AddScoped<Shortlet.Core.Interfaces.IBookingService, Shortlet.Infrastructure.Services.BookingService>();
 builder.Services.AddScoped<Shortlet.Core.Interfaces.IEmailService, Shortlet.Infrastructure.Services.EmailService>();
+
+
+// 1. Register the Email Queue as a Singleton (so the same queue is shared everywhere)
+builder.Services.AddSingleton<IEmailQueue, EmailQueueService>();
+
+// 2. Register the Background Worker as a Hosted Service
+builder.Services.AddHostedService<EmailBackgroundWorker>();
 
 // 5. Configure JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("Jwt");
@@ -115,5 +129,6 @@ app.UseAuthentication(); // 1st: Who are you? (Validates the JWT)
 app.UseAuthorization();  // 2nd: What are you allowed to do? (Checks roles)
 
 app.MapControllers();
+app.MapHub<ChatHub>("/chathub");
 
 app.Run();

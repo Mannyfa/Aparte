@@ -16,6 +16,9 @@ namespace Shortlet.Infrastructure.Data
         public DbSet<Review> Reviews { get; set; }
         public DbSet<Conversation> Conversations { get; set; }
         public DbSet<Message> Messages { get; set; }
+        public DbSet<Wallet> Wallets { get; set; }
+        public DbSet<Transaction> Transactions { get; set; }
+        public DbSet<PropertyCalendar> PropertyCalendars { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

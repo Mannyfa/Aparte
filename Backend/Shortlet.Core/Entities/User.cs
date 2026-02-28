@@ -14,5 +14,8 @@ namespace Shortlet.Core.Entities
         public string Role { get; set; } = "guest"; 
         public bool IsVerified { get; set; } = false;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+        public string? VerificationStatus { get; set; } = "Unverified";
+        public string? IdDocumentUrl { get; set; }
     }
 }
