@@ -19,6 +19,10 @@ namespace Shortlet.Infrastructure.Data
         public DbSet<Wallet> Wallets { get; set; }
         public DbSet<Transaction> Transactions { get; set; }
         public DbSet<PropertyCalendar> PropertyCalendars { get; set; }
+        public DbSet<PropertyAddOn> PropertyAddOns { get; set; }
+        public DbSet<BookingAddOn> BookingAddOns { get; set; }
+
+
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {

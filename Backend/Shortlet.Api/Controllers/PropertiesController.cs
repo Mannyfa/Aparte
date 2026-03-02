@@ -13,6 +13,7 @@ using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using Shortlet.Core.Entities;
 using Shortlet.Infrastructure.Data;
+using System.Text.Json;
 
 namespace Shortlet.Api.Controllers
 {
@@ -29,6 +30,17 @@ namespace Shortlet.Api.Controllers
         public List<IFormFile>? Images { get; set; }
         public string? Amenities { get; set; } // Sent as comma-separated from React
         public string? HouseRules { get; set; } // Sent as comma-separated from React
+        
+        // NEW: Accepts a JSON string of AddOns from React
+        public string? AddOnsJson { get; set; } 
+    }
+
+    // Quick helper class for deserializing the AddOns from React
+    public class AddOnRequestDto 
+    {
+        public string Name { get; set; }
+        public string Description { get; set; }
+        public decimal Price { get; set; }
     }
 
     [ApiController]
@@ -38,7 +50,7 @@ namespace Shortlet.Api.Controllers
         private readonly AppDbContext _context;
         private readonly Cloudinary _cloudinary;
 
-       public PropertiesController(AppDbContext context, IConfiguration config)
+        public PropertiesController(AppDbContext context, IConfiguration config)
         {
             _context = context;
             
@@ -87,6 +99,27 @@ namespace Shortlet.Api.Controllers
                     }
                 }
 
+                // --- PARSE THE ADD-ONS ---
+                var parsedAddOns = new List<PropertyAddOn>();
+                if (!string.IsNullOrEmpty(request.AddOnsJson))
+                {
+                    // FIX: Tell C# to allow numbers to be wrapped in quotes!
+                    var jsonOptions = new JsonSerializerOptions 
+                    { 
+                        PropertyNameCaseInsensitive = true,
+                        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
+                    };
+
+                    var addOnList = JsonSerializer.Deserialize<List<AddOnRequestDto>>(request.AddOnsJson, jsonOptions);
+                    if (addOnList != null)
+                    {
+                        foreach (var a in addOnList)
+                        {
+                            parsedAddOns.Add(new PropertyAddOn { Name = a.Name, Description = a.Description, Price = a.Price });
+                        }
+                    }
+                }
+
                 var property = new Property
                 {
                     HostId = hostId,
@@ -100,7 +133,8 @@ namespace Shortlet.Api.Controllers
                     ImageUrls = imageUrls,
                     // Convert comma-separated strings back into real Lists!
                     Amenities = string.IsNullOrEmpty(request.Amenities) ? new List<string>() : request.Amenities.Split(',').ToList(),
-                    HouseRules = string.IsNullOrEmpty(request.HouseRules) ? new List<string>() : request.HouseRules.Split(',').ToList()
+                    HouseRules = string.IsNullOrEmpty(request.HouseRules) ? new List<string>() : request.HouseRules.Split(',').ToList(),
+                    AddOns = parsedAddOns // Attach the AddOns!
                 };
 
                 _context.Properties.Add(property);
@@ -118,11 +152,12 @@ namespace Shortlet.Api.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GetProperties()
         {
-            var properties = await _context.Properties.Include(p => p.Host).OrderByDescending(p => p.Id).Select(p => new {
+            var properties = await _context.Properties.Include(p => p.Host).Include(p => p.AddOns).OrderByDescending(p => p.Id).Select(p => new {
                 p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
                 ImageUrls = p.ImageUrls,
                 Amenities = p.Amenities,
                 HouseRules = p.HouseRules,
+                AddOns = p.AddOns,
                 HostName = p.Host != null ? p.Host.Name : "Unknown Host",
                 HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
             }).ToListAsync();
@@ -133,14 +168,18 @@ namespace Shortlet.Api.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GetProperty(Guid id)
         {
-            var property = await _context.Properties.Include(p => p.Host).Select(p => new {
-                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
-                ImageUrls = p.ImageUrls,
-                Amenities = p.Amenities,
-                HouseRules = p.HouseRules,
-                HostName = p.Host != null ? p.Host.Name : "Unknown Host",
-                HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
-            }).FirstOrDefaultAsync(p => p.Id == id);
+            var property = await _context.Properties
+                .Include(p => p.Host)
+                .Include(p => p.AddOns) // Load the AddOns from the DB
+                .Select(p => new {
+                    p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
+                    ImageUrls = p.ImageUrls,
+                    Amenities = p.Amenities,
+                    HouseRules = p.HouseRules,
+                    AddOns = p.AddOns, // Send them to React
+                    HostName = p.Host != null ? p.Host.Name : "Unknown Host",
+                    HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
+                }).FirstOrDefaultAsync(p => p.Id == id);
 
             if (property == null) return NotFound();
             return Ok(property);
@@ -157,11 +196,12 @@ namespace Shortlet.Api.Controllers
             if (maxPrice.HasValue) query = query.Where(p => p.PricePerNight <= maxPrice.Value);
 
             var totalItems = await query.CountAsync();
-            var properties = await query.Include(p => p.Host).OrderByDescending(p => p.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(p => new {
+            var properties = await query.Include(p => p.Host).Include(p => p.AddOns).OrderByDescending(p => p.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(p => new {
                 p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
                 ImageUrls = p.ImageUrls,
                 Amenities = p.Amenities,
                 HouseRules = p.HouseRules,
+                AddOns = p.AddOns,
                 HostName = p.Host != null ? p.Host.Name : "Unknown Host",
                 HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
             }).ToListAsync();
@@ -174,7 +214,8 @@ namespace Shortlet.Api.Controllers
         public async Task<IActionResult> GetHostProperties()
         {
             var hostId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
-            var properties = await _context.Properties.Where(p => p.HostId == hostId).OrderByDescending(p => p.Id).ToListAsync();
+            // Including AddOns here too just in case the Host Dashboard needs to display them later!
+            var properties = await _context.Properties.Include(p => p.AddOns).Where(p => p.HostId == hostId).OrderByDescending(p => p.Id).ToListAsync();
             return Ok(properties);
         }
     }

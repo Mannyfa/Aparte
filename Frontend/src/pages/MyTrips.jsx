@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Calendar, MapPin, Key, Clock, XCircle, CheckCircle2, ArrowRight, Home as HomeIcon } from 'lucide-react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Calendar, MapPin, Key, Clock, XCircle, CheckCircle2, ArrowRight, Home as HomeIcon, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
@@ -21,6 +21,7 @@ const cardVariants = {
 };
 
 export default function MyTrips() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const { isAuthenticated, user } = useContext(AuthContext);
@@ -37,10 +38,17 @@ export default function MyTrips() {
       return;
     }
 
+    // --- NEW: PAYSTACK SUCCESS DETECTION ---
+    if (searchParams.get('reference') || searchParams.get('trxref')) {
+      toast.success("Payment Successful! Your funds are safe in Escrow.", { duration: 5000 });
+      // Clean the URL so it looks pretty again
+      setSearchParams({}); 
+    }
+
     const fetchTrips = async () => {
       try {
-        // Fetching from the GuestBookingsController we saw in your backend logs
-        const response = await api.get('/GuestBookings'); 
+        // Fetching from the newly created BookingsController endpoint which includes the AddOns!
+        const response = await api.get('/Bookings/guest'); 
         setTrips(response.data);
       } catch (error) {
         toast.error("Failed to load your itinerary.");
@@ -50,7 +58,7 @@ export default function MyTrips() {
     };
 
     fetchTrips();
-  }, [isAuthenticated, user, navigate]);
+  }, [isAuthenticated, user, navigate, searchParams, setSearchParams]);
 
   // Helper function to format dates nicely (e.g., "Oct 14, 2026")
   const formatDate = (dateString) => {
@@ -122,8 +130,8 @@ export default function MyTrips() {
               >
                 {/* Image & Status Badge */}
                 <div className="relative h-48 bg-gray-100 overflow-hidden">
-                  {trip.propertyImageUrl ? (
-                    <img src={trip.propertyImageUrl} alt={trip.propertyTitle} className="w-full h-full object-cover" />
+                  {trip.imageUrl ? (
+                    <img src={trip.imageUrl} alt={trip.propertyTitle} className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-gray-200 text-gray-400"><HomeIcon size={32} /></div>
                   )}
@@ -153,7 +161,7 @@ export default function MyTrips() {
                 <div className="p-6 flex flex-col flex-grow">
                   <h3 className="text-xl font-bold text-gray-900 mb-4 line-clamp-1">{trip.propertyTitle}</h3>
                   
-                  <div className="space-y-3 mb-6 flex-grow">
+                  <div className="space-y-3 mb-4 flex-grow">
                     <div className="flex items-start gap-3 text-sm">
                       <Calendar size={18} className="text-brand flex-shrink-0 mt-0.5" />
                       <div>
@@ -166,10 +174,26 @@ export default function MyTrips() {
                       <MapPin size={18} className="text-brand flex-shrink-0 mt-0.5" />
                       <div>
                         <p className="text-gray-500 font-semibold text-xs uppercase tracking-wider mb-0.5">Location</p>
-                        <p className="font-bold text-gray-800 line-clamp-1">See property details for full address</p>
+                        <p className="font-bold text-gray-800 line-clamp-1">{trip.city}, Nigeria</p>
                       </div>
                     </div>
                   </div>
+
+                  {/* --- NEW: LIFESTYLE ADD-ONS DISPLAY --- */}
+                  {trip.addOns && trip.addOns.length > 0 && (
+                    <div className="mb-6 pt-4 border-t border-gray-100">
+                      <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1">
+                        <Sparkles size={14}/> Lifestyle Services Added
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {trip.addOns.map(addon => (
+                          <span key={addon.id} className="text-[10px] font-bold bg-brand/5 text-brand border border-brand/10 px-2 py-1 rounded-md uppercase tracking-wide">
+                            {addon.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* The Golden Ticket: The Gate Code */}
                   {trip.status === 'confirmed' ? (

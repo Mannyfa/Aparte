@@ -31,6 +31,8 @@ namespace Shortlet.Core.Entities
         public List<string> Amenities { get; set; } = new List<string>();
         public List<string> HouseRules { get; set; } = new List<string>();
 
+        public ICollection<PropertyAddOn> AddOns { get; set; } = new List<PropertyAddOn>();
+
         public ICollection<PropertyImage> Images { get; set; } = new List<PropertyImage>();
     }
 }

@@ -9,12 +9,12 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR; // NEW
+using Microsoft.AspNetCore.SignalR; 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Shortlet.Api.Hubs; // NEW
+using Shortlet.Api.Hubs; 
 using Shortlet.Core.Entities;
-using Shortlet.Core.Interfaces; // NEW
+using Shortlet.Core.Interfaces; 
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
@@ -26,8 +26,8 @@ namespace Shortlet.Api.Controllers
     {
         private readonly AppDbContext _context;
         private readonly string _paystackSecret;
-        private readonly IEmailQueue _emailQueue; // NEW
-        private readonly IHubContext<ChatHub> _hubContext; // NEW
+        private readonly IEmailQueue _emailQueue; 
+        private readonly IHubContext<ChatHub> _hubContext; 
 
         public HostBookingsController(
             AppDbContext context, 
@@ -36,7 +36,7 @@ namespace Shortlet.Api.Controllers
             IHubContext<ChatHub> hubContext)
         {
             _context = context;
-            _paystackSecret = config["Paystack:SecretKey"] ?? throw new Exception("Paystack key missing");
+            _paystackSecret = config["PaystackSettings:SecretKey"] ?? config["Paystack:SecretKey"] ?? throw new Exception("Paystack key missing");
             _emailQueue = emailQueue;
             _hubContext = hubContext;
         }
@@ -44,14 +44,28 @@ namespace Shortlet.Api.Controllers
         [HttpGet]
         public async Task<IActionResult> GetHostBookings()
         {
-            var hostId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+            var hostIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(hostIdStr)) return Unauthorized();
+            var hostId = Guid.Parse(hostIdStr);
+
             var bookings = await _context.Bookings
                 .Include(b => b.Property)
+                .Include(b => b.Guest) // Let's get the Guest name too!
+                .Include(b => b.PurchasedAddOns) // <-- NEW: Fetch the Lifestyle Services!
                 .Where(b => b.Property.HostId == hostId)
                 .OrderByDescending(b => b.CheckIn)
                 .Select(b => new {
-                    b.Id, PropertyTitle = b.Property.Title, b.CheckIn, b.CheckOut, b.TotalPrice, b.Status, b.CheckInCode
+                    b.Id, 
+                    PropertyTitle = b.Property.Title, 
+                    GuestName = b.Guest != null ? b.Guest.Name : "Unknown Guest",
+                    b.CheckIn, 
+                    b.CheckOut, 
+                    b.TotalPrice, 
+                    b.Status, 
+                    b.CheckInCode,
+                    AddOns = b.PurchasedAddOns // <-- NEW: Send them to the React Dashboard!
                 }).ToListAsync();
+                
             return Ok(bookings);
         }
 
@@ -60,13 +74,13 @@ namespace Shortlet.Api.Controllers
         {
             var booking = await _context.Bookings
                 .Include(b => b.Property)
-                .Include(b => b.Guest) // Need the guest data to email them!
+                .Include(b => b.Guest) 
                 .FirstOrDefaultAsync(b => b.Id == id);
                 
             if (booking == null) return NotFound();
 
             booking.Status = "confirmed";
-            booking.CheckInCode = new Random().Next(1000, 9999).ToString();
+            booking.CheckInCode = new Random().Next(100000, 999999).ToString(); // 6 digit code
 
             _context.PropertyCalendars.Add(new PropertyCalendar {
                 PropertyId = booking.PropertyId, BookingId = booking.Id, StartDate = booking.CheckIn, EndDate = booking.CheckOut
@@ -74,7 +88,7 @@ namespace Shortlet.Api.Controllers
 
             await _context.SaveChangesAsync();
 
-            // --- 1. FIRE TO BACKGROUND EMAIL QUEUE (Takes 0.001 seconds!) ---
+            // --- 1. FIRE TO BACKGROUND EMAIL QUEUE ---
             await _emailQueue.QueueEmailAsync(new EmailMessagePayload
             {
                 ToEmail = booking.Guest.Email,
@@ -101,13 +115,22 @@ namespace Shortlet.Api.Controllers
             if (booking.Status == "paid")
             {
                 var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.HostId == booking.Property.HostId);
-                decimal hostEarnings = booking.TotalPrice * 0.95m; 
-                wallet.Balance -= hostEarnings;
+                if (wallet != null)
+                {
+                    // FIX: Synchronize the refund math with the webhook! (Total / 1.05)
+                    decimal hostEarnings = booking.TotalPrice / 1.05m; 
+                    wallet.Balance -= hostEarnings;
 
-                _context.Transactions.Add(new Transaction {
-                    WalletId = wallet.Id, Amount = hostEarnings, Type = "Debit", Description = "Refund for rejected booking", Reference = booking.PaymentReference + "_refund"
-                });
+                    _context.Transactions.Add(new Transaction {
+                        WalletId = wallet.Id, 
+                        Amount = hostEarnings, 
+                        Type = "Debit", 
+                        Description = "Refund for rejected booking", 
+                        Reference = booking.PaymentReference + "_refund"
+                    });
+                }
 
+                // Call Paystack to officially refund the guest's card
                 using var client = new HttpClient();
                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _paystackSecret);
                 var content = new StringContent(JsonSerializer.Serialize(new { transaction = booking.PaymentReference }), Encoding.UTF8, "application/json");
