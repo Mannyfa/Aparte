@@ -1,5 +1,5 @@
-# 1. Use the official .NET SDK image to build the app
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# 1. Use the official .NET 9 SDK image to build the app
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /app
 
 # 2. Copy all the backend files into the container
@@ -8,8 +8,8 @@ COPY . ./
 # 3. Publish the API project to a folder called "/out"
 RUN dotnet publish Shortlet.Api/Shortlet.Api.csproj -c Release -o /out
 
-# 4. Use the lightweight .NET runtime image to run the app
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+# 4. Use the lightweight .NET 9 runtime image to run the app
+FROM mcr.microsoft.com/dotnet/aspnet:9.0 AS runtime
 WORKDIR /app
 COPY --from=build /out .
 
