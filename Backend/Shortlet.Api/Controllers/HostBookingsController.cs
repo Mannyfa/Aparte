@@ -42,32 +42,42 @@ namespace Shortlet.Api.Controllers
         }
 
         [HttpGet]
-        public async Task<IActionResult> GetHostBookings()
-        {
-            var hostIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(hostIdStr)) return Unauthorized();
-            var hostId = Guid.Parse(hostIdStr);
+public async Task<IActionResult> GetHostBookings()
+{
+    try
+    {
+        var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdClaim)) return Unauthorized();
+        var hostId = Guid.Parse(userIdClaim);
 
-            var bookings = await _context.Bookings
-                .Include(b => b.Property)
-                .Include(b => b.Guest) // Let's get the Guest name too!
-                .Include(b => b.PurchasedAddOns) // <-- NEW: Fetch the Lifestyle Services!
-                .Where(b => b.Property.HostId == hostId)
-                .OrderByDescending(b => b.CheckIn)
-                .Select(b => new {
-                    b.Id, 
-                    PropertyTitle = b.Property.Title, 
-                    GuestName = b.Guest != null ? b.Guest.Name : "Unknown Guest",
-                    b.CheckIn, 
-                    b.CheckOut, 
-                    b.TotalPrice, 
-                    b.Status, 
-                    b.CheckInCode,
-                    AddOns = b.PurchasedAddOns // <-- NEW: Send them to the React Dashboard!
-                }).ToListAsync();
-                
-            return Ok(bookings);
-        }
+        var bookings = await _context.Bookings
+            .Include(b => b.Property)
+            .Include(b => b.Guest)
+            .Where(b => b.Property.HostId == hostId)
+            // THE FIX: This forces the newest bookings to always appear at the top!
+            .OrderByDescending(b => b.CheckIn) 
+            .Select(b => new {
+                id = b.Id,
+                propertyTitle = b.Property.Title,
+                totalPrice = b.TotalPrice,
+                status = b.Status,
+                checkInCode = b.CheckInCode,
+                checkIn = b.CheckIn,
+                checkOut = b.CheckOut,
+                guestName = b.Guest.Name,
+                guestPhone = b.Guest.Phone,
+                // Make sure your database includes this AddOns column!
+                addOns = b.AddOns 
+            })
+            .ToListAsync();
+
+        return Ok(bookings);
+    }
+    catch (Exception ex)
+    {
+        return StatusCode(500, new { message = ex.Message });
+    }
+}
 
         [HttpPost("{id}/accept")]
         public async Task<IActionResult> AcceptBooking(Guid id)
