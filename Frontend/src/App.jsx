@@ -14,6 +14,7 @@ import Dashboard from './pages/Dashboard';
 import Register from './pages/Register';
 import MyTrips from './pages/MyTrips';
 import PropertyDetails from './pages/PropertyDetails';
+import AdminDashboard from './pages/AdminDashboard';
 
 
 
@@ -37,6 +38,7 @@ function App() {
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/my-trips" element={<MyTrips />} />
             <Route path="/property/:id" element={<PropertyDetails />} />
+            <Route path="/admin" element={<AdminDashboard />} />
           </Routes>
         </main>
 
