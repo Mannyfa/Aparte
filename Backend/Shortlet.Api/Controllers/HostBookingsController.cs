@@ -41,7 +41,7 @@ namespace Shortlet.Api.Controllers
             _hubContext = hubContext;
         }
 
-        [HttpGet]
+     [HttpGet]
 public async Task<IActionResult> GetHostBookings()
 {
     try
@@ -53,9 +53,9 @@ public async Task<IActionResult> GetHostBookings()
         var bookings = await _context.Bookings
             .Include(b => b.Property)
             .Include(b => b.Guest)
+            .Include(b => b.PurchasedAddOns) // <-- Fetch the relational add-ons!
             .Where(b => b.Property.HostId == hostId)
-            // THE FIX: This forces the newest bookings to always appear at the top!
-            .OrderByDescending(b => b.CheckIn) 
+            .OrderByDescending(b => b.CreatedAt) // <-- Perfect sorting!
             .Select(b => new {
                 id = b.Id,
                 propertyTitle = b.Property.Title,
@@ -66,8 +66,7 @@ public async Task<IActionResult> GetHostBookings()
                 checkOut = b.CheckOut,
                 guestName = b.Guest.Name,
                 guestPhone = b.Guest.Phone,
-                // Make sure your database includes this AddOns column!
-                addOns = b.AddOns 
+                addOns = b.PurchasedAddOns // <-- Pass your proper collection to React
             })
             .ToListAsync();
 
