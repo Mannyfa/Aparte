@@ -132,8 +132,8 @@ namespace Shortlet.Api.Controllers
                 {
                     amount = amountInKobo,
                     email = guest?.Email ?? "guest@apartey.com",
-                    reference = booking.Id.ToString(), // Bind the payment specifically to this booking ID!
-                    callback_url = "http://localhost:5174/my-trips" // Redirect to their trips page after payment
+                    reference = booking.Id.ToString(), 
+                    callback_url = "https://aparteyng.vercel.app/my-trips" 
                 };
 
                 var content = new StringContent(JsonSerializer.Serialize(paystackPayload), Encoding.UTF8, "application/json");
