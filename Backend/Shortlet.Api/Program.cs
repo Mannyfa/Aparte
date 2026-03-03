@@ -69,7 +69,6 @@ builder.Services.AddHttpClient<Shortlet.Core.Interfaces.IPaystackService, Shortl
 builder.Services.AddScoped<Shortlet.Core.Interfaces.IBookingService, Shortlet.Infrastructure.Services.BookingService>();
 builder.Services.AddScoped<Shortlet.Core.Interfaces.IEmailService, Shortlet.Infrastructure.Services.EmailService>();
 
-
 // 1. Register the Email Queue as a Singleton (so the same queue is shared everywhere)
 builder.Services.AddSingleton<IEmailQueue, EmailQueueService>();
 
@@ -99,30 +98,33 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
-// Allow our React frontend to talk to this API
+// --- UPDATED CORS POLICY ---
+// Allow our React frontend (both local and live Vercel) to talk to this API
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5174", "http://localhost:5173") // Add your Vite ports
+        policy.WithOrigins(
+                "https://aparteyng.vercel.app", // Your live Vercel domain
+                "http://localhost:5174", 
+                "http://localhost:5173"
+              )
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              .AllowCredentials(); // REQUIRED for SignalR (ChatHub) to work across domains!
     });
 });
 
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// Note: Swagger is available in Production now so you can test your live database easily.
+app.UseSwagger();
+app.UseSwaggerUI();
 
 app.UseHttpsRedirection();
 
 // IMPORTANT: Order matters here! CORS -> Auth -> Controllers
-app.UseCors("AllowReactApp");
 app.UseCors("AllowFrontend");
 
 app.UseAuthentication(); // 1st: Who are you? (Validates the JWT)
