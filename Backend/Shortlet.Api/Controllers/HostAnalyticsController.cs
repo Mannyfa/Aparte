@@ -42,13 +42,16 @@ namespace Shortlet.Api.Controllers
                 decimal availableBalance = wallet?.Balance ?? 0;
                 decimal pendingClearance = wallet?.PendingClearance ?? 0;
 
-                // 3. Calculate Earnings STRICTLY for This Month
+                // 3. Calculate Earnings STRICTLY for This Month (Fixed Postgres Overflow Bug)
                 decimal earningsThisMonth = 0;
                 if (wallet != null)
                 {
-                    earningsThisMonth = await _context.Transactions
+                    var transactionAmounts = await _context.Transactions
                         .Where(t => t.WalletId == wallet.Id && t.Type == "Credit" && t.Date >= startOfMonth)
-                        .SumAsync(t => t.Amount);
+                        .Select(t => t.Amount)
+                        .ToListAsync();
+                        
+                    earningsThisMonth = transactionAmounts.Sum();
                 }
 
                 // 4. Count Upcoming Confirmed Bookings
