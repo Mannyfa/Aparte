@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const api = axios.create({
   // This must match your backend URL exactly!
-  baseURL: 'http://localhost:5173/api',
+  baseURL: 'https://aparte-s1sb.onrender.com/api',
 });
 
 // This automatically attaches your JWT token to every request!
