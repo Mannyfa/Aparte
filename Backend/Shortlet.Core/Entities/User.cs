@@ -15,7 +15,9 @@ namespace Shortlet.Core.Entities
         public bool IsVerified { get; set; } = false;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
-        public string? VerificationStatus { get; set; } = "Unverified";
+        // --- KYC & Verification Fields ---
+        public string VerificationStatus { get; set; } = "Unverified"; 
         public string? IdDocumentUrl { get; set; }
+        public string? IdDocumentType { get; set; } 
     }
 }
