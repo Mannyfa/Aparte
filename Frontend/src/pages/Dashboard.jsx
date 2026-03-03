@@ -54,6 +54,16 @@ export default function Dashboard() {
   const [overview, setOverview] = useState(null);
   const [fetchingOverview, setFetchingOverview] = useState(true);
 
+  // SOFT LIFE: State for tracking which booking is currently expanded
+  const [expandedBookingId, setExpandedBookingId] = useState(null);
+
+  // SOFT LIFE: Helper to safely parse the add-ons from the database
+  const parseAddOns = (addOnsData) => {
+    if (!addOnsData) return [];
+    if (Array.isArray(addOnsData)) return addOnsData;
+    try { return JSON.parse(addOnsData); } catch (e) { return []; }
+  };
+
   const [chatConnection, setChatConnection] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
@@ -342,7 +352,6 @@ export default function Dashboard() {
             </button>
           </div>
           
-          {/* Properties Grid omitted for brevity, functions the same as before */}
            {fetchingListings ? (
             <div className="text-center py-12 text-gray-500 font-bold animate-pulse">Loading your portfolio...</div>
           ) : hostProperties.length === 0 ? (
@@ -387,7 +396,6 @@ export default function Dashboard() {
   );
 
   const renderBookings = () => (
-     // Render Bookings code remains identical to previous version
      <div className="animate-fade-in space-y-6">
         <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
           <div>
@@ -404,7 +412,6 @@ export default function Dashboard() {
           </button>
         </div>
         
-        {/* Simplified mapping for brevity */}
         {fetchingBookings ? (
           <div className="text-center py-12 text-gray-500 font-bold animate-pulse">Loading reservations...</div>
         ) : bookings.length === 0 ? (
@@ -414,23 +421,81 @@ export default function Dashboard() {
           </div>
         ) : (
            <div className="space-y-6">
-             {bookings.map((booking) => (
-                <div key={booking.id} className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm flex flex-col lg:flex-row gap-8">
-                   <div className="flex-1">
-                      <h3 className="font-black text-xl text-brand">{booking.propertyTitle}</h3>
-                      <p className="mt-2 text-sm text-gray-600">Total Payout: ₦{(booking.totalPrice / 1.05).toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
-                      
-                      {booking.status === 'paid' && (
-                        <div className="mt-4 flex gap-3">
-                           <button onClick={() => handleAcceptBooking(booking.id)} className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-bold">Accept Booking</button>
-                        </div>
-                      )}
-                      {booking.status === 'confirmed' && (
-                        <div className="mt-4 text-green-700 font-bold">Code: {booking.checkInCode}</div>
-                      )}
+             {bookings.map((booking) => {
+               const isExpanded = expandedBookingId === booking.id;
+               const selectedAddOns = parseAddOns(booking.addOns);
+
+               return (
+                <div key={booking.id} className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm flex flex-col transition-all">
+                   <div className="flex flex-col lg:flex-row gap-6 justify-between items-start lg:items-center">
+                     <div className="flex-1">
+                        <h3 className="font-black text-xl text-brand">{booking.propertyTitle}</h3>
+                        <p className="mt-1 text-sm text-gray-600 font-medium">Total Payout: <span className="text-green-600 font-bold">₦{(booking.totalPrice / 1.05).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></p>
+                        
+                        {booking.status === 'confirmed' && (
+                          <div className="mt-2 inline-block bg-green-50 text-green-700 font-bold px-3 py-1 rounded-md border border-green-200">
+                            Check-In Code: {booking.checkInCode}
+                          </div>
+                        )}
+                     </div>
+
+                     <div className="flex flex-wrap gap-3">
+                        <button 
+                          onClick={() => setExpandedBookingId(isExpanded ? null : booking.id)} 
+                          className="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors"
+                        >
+                          <ConciergeBell size={16} />
+                          {isExpanded ? 'Hide Details' : 'View Details'}
+                        </button>
+
+                        {booking.status === 'paid' && (
+                          <button onClick={() => handleAcceptBooking(booking.id)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors shadow-sm">
+                            Accept Booking
+                          </button>
+                        )}
+                     </div>
                    </div>
+
+                   {/* --- EXPANDED DETAILS SECTION (SOFT LIFE UPGRADE) --- */}
+                   {isExpanded && (
+                     <div className="mt-6 pt-6 border-t border-gray-100 animate-fade-in">
+                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                         
+                         {/* Guest Info */}
+                         <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
+                           <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Guest Information</h4>
+                           <p className="font-bold text-gray-800">{booking.guestName || 'Apartey Guest'}</p>
+                           <p className="text-sm text-gray-600 mt-1">
+                             Dates: {new Date(booking.checkIn).toLocaleDateString()} to {new Date(booking.checkOut).toLocaleDateString()}
+                           </p>
+                           {booking.guestPhone && (
+                             <p className="text-sm text-gray-600 mt-1">Phone: {booking.guestPhone}</p>
+                           )}
+                         </div>
+
+                         {/* Add-ons Info */}
+                         <div className="bg-brand/5 p-4 rounded-xl border border-brand/10">
+                           <h4 className="text-xs font-bold text-brand uppercase tracking-wider mb-3">Requested Add-ons</h4>
+                           {selectedAddOns.length > 0 ? (
+                             <ul className="space-y-2">
+                               {selectedAddOns.map((addon, idx) => (
+                                 <li key={idx} className="flex justify-between items-center text-sm font-medium text-gray-800 bg-white p-2 rounded-lg shadow-sm border border-gray-100">
+                                   <span>{addon.name || addon.title}</span>
+                                   <span className="text-brand font-bold">₦{(addon.price).toLocaleString()}</span>
+                                 </li>
+                               ))}
+                             </ul>
+                           ) : (
+                             <p className="text-sm text-gray-500 italic">No premium add-ons selected for this stay.</p>
+                           )}
+                         </div>
+
+                       </div>
+                     </div>
+                   )}
                 </div>
-             ))}
+               );
+             })}
            </div>
         )}
      </div>
@@ -456,7 +521,6 @@ export default function Dashboard() {
     </div>
   );
 
-  // --- NEW UI: THE FREEMIUM KYC TAB ---
   const renderVerification = () => (
     <div className="animate-fade-in space-y-6 max-w-3xl">
       <div>
