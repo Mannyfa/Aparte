@@ -1,4 +1,3 @@
-/** @type {import('tailwindcss').Config} */
 export default {
   content: [
     "./index.html",
@@ -6,9 +5,13 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+        display: ['"Syne"', 'sans-serif'], 
+      },
       colors: {
-        brand: '#0f172a', // A deep luxury blue for our Shortlet theme
-        accent: '#38bdf8' // A nice pop of blue for buttons
+        brand: '#0f172a', // The new deep obsidian blue
+        accent: '#d4af37', // A warm gold/sand accent
       }
     },
   },
