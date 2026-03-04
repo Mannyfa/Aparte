@@ -5,6 +5,7 @@ import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import PropertyMap from '../components/PropertyMap';
+import BrandLoader from '../components/BrandLoader'; // <-- Your new custom loader!
 import { motion, AnimatePresence } from 'framer-motion';
 
 const heroImages = [
@@ -94,8 +95,8 @@ export default function Home() {
       {/* --- SPECTACULAR CINEMATIC HERO SECTION --- */}
       <div className="relative h-[85vh] min-h-[650px] w-full flex items-center justify-center overflow-hidden mb-16">
         
-        {/* Crossfading Background Images */}
-        <AnimatePresence mode="popLayout">
+        {/* Crossfading Background Images (Fixed!) */}
+        <AnimatePresence>
           <motion.div
             key={currentSlide}
             initial={{ opacity: 0, scale: 1.05 }}
@@ -132,61 +133,61 @@ export default function Home() {
             </p>
           </motion.div>
 
-          {/* --- THE GLASSMORPHISM SEARCH BAR --- */}
+          {/* --- THE GLASSMORPHISM SEARCH BAR (White/Readable Update!) --- */}
           <motion.div 
             initial={{ opacity: 0, y: 40 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.4 }}
             className="w-full max-w-5xl mx-auto"
           >
-            <div className="bg-white/10 backdrop-blur-md border border-white/20 p-2 md:p-3 rounded-3xl md:rounded-full shadow-2xl">
-              <form onSubmit={handleSearchClick} className="flex flex-col md:flex-row items-center gap-2 divide-y md:divide-y-0 md:divide-x divide-white/20">
+            <div className="bg-white/90 backdrop-blur-md border border-white p-2 md:p-3 rounded-3xl md:rounded-full shadow-2xl">
+              <form onSubmit={handleSearchClick} className="flex flex-col md:flex-row items-center gap-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
                 
                 {/* Location Input */}
-                <div className="w-full md:w-1/3 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-white/5 rounded-full transition-colors cursor-text">
+                <div className="w-full md:w-1/3 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-gray-100/50 rounded-full transition-colors cursor-text">
                   <MapPin className="text-accent flex-shrink-0" size={24} />
                   <div className="flex flex-col text-left w-full">
-                    <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Where to?</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Where to?</label>
                     <input 
                       type="text" 
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                       placeholder="Lekki, Ikoyi, Abuja..." 
-                      className="bg-transparent border-none text-white placeholder-gray-400 focus:ring-0 text-sm md:text-base font-semibold w-full outline-none p-0"
+                      className="bg-transparent border-none text-brand placeholder-gray-400 focus:ring-0 text-sm md:text-base font-bold w-full outline-none p-0"
                     />
                   </div>
                 </div>
 
                 {/* Property Type Dropdown */}
-                <div className="w-full md:w-1/4 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-white/5 rounded-full transition-colors">
+                <div className="w-full md:w-1/4 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-gray-100/50 rounded-full transition-colors">
                   <HomeIcon className="text-accent flex-shrink-0" size={22} />
                   <div className="flex flex-col text-left w-full">
-                    <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Property Type</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Property Type</label>
                     <select 
                       value={filterType} 
                       onChange={(e) => setFilterType(e.target.value)} 
-                      className="bg-transparent border-none text-white focus:ring-0 text-sm md:text-base font-semibold w-full outline-none p-0 appearance-none cursor-pointer"
+                      className="bg-transparent border-none text-brand focus:ring-0 text-sm md:text-base font-bold w-full outline-none p-0 appearance-none cursor-pointer"
                     >
-                      <option value="" className="text-brand">All Types</option>
-                      <option value="Apartment" className="text-brand">Apartment</option>
-                      <option value="Penthouse" className="text-brand">Penthouse</option>
-                      <option value="Duplex" className="text-brand">Duplex</option>
-                      <option value="Studio" className="text-brand">Studio</option>
+                      <option value="">All Types</option>
+                      <option value="Apartment">Apartment</option>
+                      <option value="Penthouse">Penthouse</option>
+                      <option value="Duplex">Duplex</option>
+                      <option value="Studio">Studio</option>
                     </select>
                   </div>
                 </div>
 
                 {/* Max Price Input */}
-                <div className="w-full md:w-1/4 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-white/5 rounded-full transition-colors">
+                <div className="w-full md:w-1/4 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-gray-100/50 rounded-full transition-colors">
                   <Wallet className="text-accent flex-shrink-0" size={22} />
                   <div className="flex flex-col text-left w-full">
-                    <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Max Budget</label>
+                    <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Max Budget</label>
                     <input 
                       type="number" 
                       value={maxPrice}
                       onChange={(e) => setMaxPrice(e.target.value)}
                       placeholder="₦ Any Amount" 
-                      className="bg-transparent border-none text-white placeholder-gray-400 focus:ring-0 text-sm md:text-base font-semibold w-full outline-none p-0"
+                      className="bg-transparent border-none text-brand placeholder-gray-400 focus:ring-0 text-sm md:text-base font-bold w-full outline-none p-0"
                     />
                   </div>
                 </div>
@@ -195,7 +196,7 @@ export default function Home() {
                 <div className="w-full md:w-auto p-1">
                   <button 
                     type="submit"
-                    className="w-full md:w-auto bg-accent hover:bg-yellow-500 text-brand p-4 md:px-10 rounded-2xl md:rounded-full font-black transition-all shadow-lg hover:shadow-accent/30 hover:scale-105 flex items-center justify-center gap-2"
+                    className="w-full md:w-auto bg-brand hover:bg-gray-800 text-accent p-4 md:px-10 rounded-2xl md:rounded-full font-black transition-all shadow-lg hover:shadow-brand/30 hover:scale-105 flex items-center justify-center gap-2"
                   >
                     <Search size={20} />
                     <span className="md:hidden">Search Properties</span>
@@ -226,9 +227,9 @@ export default function Home() {
           </div>
         </motion.div>
         
-        {/* RENDER LISTINGS */}
+        {/* RENDER LISTINGS (Now with BrandLoader!) */}
         {loading ? (
-           <div className="flex justify-center items-center py-32"><div className="w-10 h-10 border-4 border-accent border-t-transparent rounded-full animate-spin"></div></div>
+           <BrandLoader />
         ) : properties.length === 0 ? (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm">
             <Search size={48} className="mx-auto text-gray-300 mb-4" />
