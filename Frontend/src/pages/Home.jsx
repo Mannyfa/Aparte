@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { MapPin, ChevronDown, Map as MapIcon, List, Search, ShieldCheck, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { MapPin, ChevronDown, Map as MapIcon, List, Search, ShieldCheck, ArrowRight, ChevronLeft, ChevronRight, Home as HomeIcon, Wallet } from 'lucide-react';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
@@ -16,10 +16,7 @@ const heroImages = [
 // Animation Variants for staggered loading
 const containerVariants = {
   hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: { staggerChildren: 0.15 }
-  }
+  show: { opacity: 1, transition: { staggerChildren: 0.15 } }
 };
 
 const itemVariants = {
@@ -72,23 +69,32 @@ export default function Home() {
     fetchProperties();
   }, [page]);
 
-  const handleSearchClick = () => {
+  const handleSearchClick = (e) => {
+    e.preventDefault();
     if (page === 1) fetchProperties(); 
     else setPage(1); 
+    scrollToListings();
   };
 
   const scrollToListings = () => {
     const element = document.getElementById('discover-section');
     if (element) {
-      element.scrollIntoView({ behavior: 'smooth' });
+      const offset = 100; // Adjusts scroll position to account for sticky navbar
+      const bodyRect = document.body.getBoundingClientRect().top;
+      const elementRect = element.getBoundingClientRect().top;
+      const elementPosition = elementRect - bodyRect;
+      const offsetPosition = elementPosition - offset;
+      window.scrollTo({ top: offsetPosition, behavior: 'smooth' });
     }
   };
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
       
-      {/* --- HERO SECTION WITH ADVANCED CROSSFADE --- */}
-      <div className="relative h-[85vh] w-full flex items-center justify-center overflow-hidden mb-16">
+      {/* --- SPECTACULAR CINEMATIC HERO SECTION --- */}
+      <div className="relative h-[85vh] min-h-[650px] w-full flex items-center justify-center overflow-hidden mb-16">
+        
+        {/* Crossfading Background Images */}
         <AnimatePresence mode="popLayout">
           <motion.div
             key={currentSlide}
@@ -101,92 +107,118 @@ export default function Home() {
           />
         </AnimatePresence>
         
-        {/* Luxury Dark Overlay */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/40 to-[#f9fafb]" />
+        {/* Luxury Dark Gradient Overlay */}
+        <div className="absolute inset-0 bg-gradient-to-b from-brand/90 via-brand/50 to-gray-50/90" />
         
-        <div className="relative z-10 text-center px-4 max-w-5xl mx-auto flex flex-col items-center pt-20 pb-32 md:pb-48">
+        <div className="relative z-10 w-full max-w-6xl mx-auto px-4 flex flex-col items-center text-center mt-12">
+          
+          {/* Animated Headlines */}
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 0.2 }}
           >
-            <span className="bg-white/20 backdrop-blur-md text-white border border-white/30 px-4 py-1.5 rounded-full text-sm font-bold tracking-widest uppercase mb-6 inline-block shadow-lg">
-              Welcome to Apartey
+            <span className="text-accent font-bold tracking-widest uppercase text-xs md:text-sm mb-4 block drop-shadow-md">
+              Welcome to the New Standard
             </span>
-            <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-white mb-6 leading-tight drop-shadow-2xl">
-              Experience <br/><span className="text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400">Luxury Living.</span>
+            <h1 className="text-5xl md:text-7xl lg:text-8xl font-display font-extrabold text-white leading-tight tracking-tight mb-6 drop-shadow-2xl">
+              Curated Escapes. <br className="hidden md:block"/> 
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-accent to-yellow-200">
+                Unmatched Luxury.
+              </span>
             </h1>
-            <p className="text-lg md:text-xl text-gray-200 mb-10 max-w-2xl mx-auto font-medium drop-shadow-md">
-              Discover the finest curated shortlets, penthouses, and premium apartments across Nigeria. Unmatched comfort, verified hosts.
+            <p className="text-lg md:text-xl text-gray-200 font-medium max-w-2xl mx-auto drop-shadow-md mb-12">
+              Discover the finest verified shortlets, penthouses, and premium apartments across Nigeria.
             </p>
           </motion.div>
 
-          <motion.button 
-            initial={{ opacity: 0, y: 20 }}
+          {/* --- THE GLASSMORPHISM SEARCH BAR --- */}
+          <motion.div 
+            initial={{ opacity: 0, y: 40 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, delay: 0.5 }}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={scrollToListings} 
-            className="bg-brand hover:bg-white hover:text-brand text-white px-8 py-4 rounded-full font-bold flex items-center gap-3 transition-all duration-300 shadow-2xl"
+            transition={{ duration: 0.8, delay: 0.4 }}
+            className="w-full max-w-5xl mx-auto"
           >
-            Start Exploring <ArrowRight size={20} />
-          </motion.button>
+            <div className="bg-white/10 backdrop-blur-md border border-white/20 p-2 md:p-3 rounded-3xl md:rounded-full shadow-2xl">
+              <form onSubmit={handleSearchClick} className="flex flex-col md:flex-row items-center gap-2 divide-y md:divide-y-0 md:divide-x divide-white/20">
+                
+                {/* Location Input */}
+                <div className="w-full md:w-1/3 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-white/5 rounded-full transition-colors cursor-text">
+                  <MapPin className="text-accent flex-shrink-0" size={24} />
+                  <div className="flex flex-col text-left w-full">
+                    <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Where to?</label>
+                    <input 
+                      type="text" 
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      placeholder="Lekki, Ikoyi, Abuja..." 
+                      className="bg-transparent border-none text-white placeholder-gray-400 focus:ring-0 text-sm md:text-base font-semibold w-full outline-none p-0"
+                    />
+                  </div>
+                </div>
+
+                {/* Property Type Dropdown */}
+                <div className="w-full md:w-1/4 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-white/5 rounded-full transition-colors">
+                  <HomeIcon className="text-accent flex-shrink-0" size={22} />
+                  <div className="flex flex-col text-left w-full">
+                    <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Property Type</label>
+                    <select 
+                      value={filterType} 
+                      onChange={(e) => setFilterType(e.target.value)} 
+                      className="bg-transparent border-none text-white focus:ring-0 text-sm md:text-base font-semibold w-full outline-none p-0 appearance-none cursor-pointer"
+                    >
+                      <option value="" className="text-brand">All Types</option>
+                      <option value="Apartment" className="text-brand">Apartment</option>
+                      <option value="Penthouse" className="text-brand">Penthouse</option>
+                      <option value="Duplex" className="text-brand">Duplex</option>
+                      <option value="Studio" className="text-brand">Studio</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Max Price Input */}
+                <div className="w-full md:w-1/4 px-4 py-3 md:py-0 flex items-center gap-3 hover:bg-white/5 rounded-full transition-colors">
+                  <Wallet className="text-accent flex-shrink-0" size={22} />
+                  <div className="flex flex-col text-left w-full">
+                    <label className="text-[10px] font-bold text-gray-300 uppercase tracking-wider">Max Budget</label>
+                    <input 
+                      type="number" 
+                      value={maxPrice}
+                      onChange={(e) => setMaxPrice(e.target.value)}
+                      placeholder="₦ Any Amount" 
+                      className="bg-transparent border-none text-white placeholder-gray-400 focus:ring-0 text-sm md:text-base font-semibold w-full outline-none p-0"
+                    />
+                  </div>
+                </div>
+
+                {/* Search Button */}
+                <div className="w-full md:w-auto p-1">
+                  <button 
+                    type="submit"
+                    className="w-full md:w-auto bg-accent hover:bg-yellow-500 text-brand p-4 md:px-10 rounded-2xl md:rounded-full font-black transition-all shadow-lg hover:shadow-accent/30 hover:scale-105 flex items-center justify-center gap-2"
+                  >
+                    <Search size={20} />
+                    <span className="md:hidden">Search Properties</span>
+                  </button>
+                </div>
+
+              </form>
+            </div>
+          </motion.div>
+
         </div>
       </div>
 
-      <div id="discover-section" className="max-w-7xl mx-auto px-6 lg:px-8">
+      <div id="discover-section" className="max-w-7xl mx-auto px-6 lg:px-8 pt-8">
         
-        {/* --- FLOATING ADVANCED SEARCH BAR --- */}
-        <motion.div 
-          initial={{ opacity: 0, y: 40 }}
-          whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: true, margin: "-100px" }}
-          transition={{ duration: 0.6 }}
-          className="bg-white p-6 rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.06)] mb-12 flex flex-wrap gap-5 items-end border border-gray-100 relative -mt-32 z-20"
-        >
-          <div className="flex-1 min-w-[200px]">
-            <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">Location or Title</label>
-            <div className="relative">
-              <Search size={18} className="absolute left-4 top-3.5 text-gray-400" />
-              <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="e.g. Lekki, Ikoyi..." className="w-full pl-12 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand outline-none transition-all" />
-            </div>
-          </div>
-          
-          <div className="w-full md:w-auto">
-            <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">Property Type</label>
-            <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand outline-none font-medium text-gray-700 transition-all">
-              <option value="">All Types</option>
-              <option value="Apartment">Apartment</option>
-              <option value="Penthouse">Penthouse</option>
-              <option value="Duplex">Duplex</option>
-              <option value="Studio">Studio</option>
-            </select>
-          </div>
-
-          <div className="w-1/2 md:w-36">
-            <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">Min Price</label>
-            <input type="number" value={minPrice} onChange={(e) => setMinPrice(e.target.value)} placeholder="₦ 0" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand outline-none transition-all" />
-          </div>
-          
-          <div className="w-1/2 md:w-36">
-            <label className="block text-xs font-bold text-gray-500 mb-2 uppercase tracking-wider">Max Price</label>
-            <input type="number" value={maxPrice} onChange={(e) => setMaxPrice(e.target.value)} placeholder="₦ Any" className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand outline-none transition-all" />
-          </div>
-
-          <button onClick={handleSearchClick} className="w-full md:w-auto bg-brand hover:bg-gray-800 text-white px-10 py-3 rounded-xl font-bold transition-all shadow-md hover:shadow-lg flex-shrink-0">
-            Search
-          </button>
-        </motion.div>
-
         {/* VIEW TOGGLE & HEADER */}
         <motion.div 
           initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} viewport={{ once: true }}
           className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 border-b border-gray-200 pb-6"
         >
           <div>
-            <h2 className="text-3xl md:text-4xl font-extrabold text-brand mb-2">Curated Escapes</h2>
-            <p className="text-gray-500 font-medium text-sm md:text-base">Find the perfect backdrop for your next getaway.</p>
+            <h2 className="text-3xl md:text-4xl font-display font-extrabold text-brand mb-2">Available Escapes</h2>
+            <p className="text-gray-500 font-medium text-sm md:text-base">Showing results for your search criteria.</p>
           </div>
           <div className="flex bg-gray-100 p-1 rounded-xl mt-4 md:mt-0 shadow-inner">
             <button onClick={() => setViewMode('list')} className={`flex items-center gap-2 px-5 py-2.5 rounded-lg font-bold text-sm transition-all ${viewMode === 'list' ? 'bg-white shadow-sm text-brand' : 'text-gray-500 hover:text-gray-700'}`}><List size={18} /> List</button>
@@ -196,11 +228,11 @@ export default function Home() {
         
         {/* RENDER LISTINGS */}
         {loading ? (
-           <div className="flex justify-center items-center py-32"><div className="w-10 h-10 border-4 border-brand border-t-transparent rounded-full animate-spin"></div></div>
+           <div className="flex justify-center items-center py-32"><div className="w-10 h-10 border-4 border-accent border-t-transparent rounded-full animate-spin"></div></div>
         ) : properties.length === 0 ? (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="text-center py-20 bg-white rounded-3xl border border-gray-100 shadow-sm">
             <Search size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-xl font-bold text-gray-800 mb-2">No exact matches found</h3>
+            <h3 className="text-xl font-bold text-brand mb-2">No exact matches found</h3>
             <p className="text-gray-500">Try adjusting your filters or searching a different area.</p>
           </motion.div>
         ) : viewMode === 'map' ? (
@@ -219,7 +251,7 @@ export default function Home() {
               <motion.div 
                 key={property.id} 
                 variants={itemVariants}
-                className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-2xl transition-all duration-500 group flex flex-col"
+                className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-2xl transition-all duration-500 group flex flex-col"
               >
                 <div className="relative h-64 overflow-hidden bg-gray-100">
                   {property.imageUrls && property.imageUrls.length > 0 ? (
@@ -228,7 +260,7 @@ export default function Home() {
                     <div className="w-full h-full flex items-center justify-center text-gray-400 font-bold bg-gray-200">No Image</div>
                   )}
                   {/* Gradient Overlay for text readability */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"/>
+                  <div className="absolute inset-0 bg-gradient-to-t from-brand/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"/>
                   
                   <div className="absolute top-4 left-4 flex flex-col gap-2">
                     <span className="bg-white/90 backdrop-blur-sm text-brand text-xs font-black uppercase tracking-wider px-3 py-1.5 rounded-lg shadow-sm">
@@ -236,14 +268,14 @@ export default function Home() {
                     </span>
                   </div>
                   
-                  <div className="absolute bottom-4 right-4 bg-brand text-white px-4 py-2 rounded-xl font-black shadow-lg translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
-                    ₦{property.pricePerNight.toLocaleString()}<span className="text-xs font-normal opacity-80">/nt</span>
+                  <div className="absolute bottom-4 right-4 bg-brand text-accent px-4 py-2 rounded-xl font-black shadow-lg translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
+                    ₦{property.pricePerNight.toLocaleString()}<span className="text-xs font-normal text-white opacity-80">/nt</span>
                   </div>
                 </div>
                 
                 <div className="p-6 flex flex-col flex-grow">
                   <div className="flex justify-between items-start mb-2 gap-2">
-                    <h3 className="text-xl font-bold text-gray-900 leading-tight group-hover:text-brand transition-colors line-clamp-2">{property.title}</h3>
+                    <h3 className="text-xl font-bold text-brand leading-tight transition-colors line-clamp-2">{property.title}</h3>
                   </div>
                   
                   {property.hostVerificationStatus === 'Verified' && (
@@ -254,13 +286,13 @@ export default function Home() {
                   )}
 
                   <div className="flex items-center text-gray-500 text-sm mb-8 flex-grow">
-                    <MapPin size={16} className="mr-1.5 text-brand flex-shrink-0" />
+                    <MapPin size={16} className="mr-1.5 text-accent flex-shrink-0" />
                     <span className="font-medium truncate">{property.area}, {property.city}</span>
                   </div>
                   
                   <button 
                     onClick={() => navigate(`/property/${property.id}`)} 
-                    className="w-full bg-gray-900 hover:bg-brand text-white px-4 py-3.5 rounded-xl font-bold transition-all duration-300 flex items-center justify-center gap-2 shadow-md hover:shadow-xl"
+                    className="w-full bg-brand hover:bg-gray-800 text-white px-4 py-3.5 rounded-xl font-bold transition-all duration-300 flex items-center justify-center gap-2 shadow-md hover:shadow-xl"
                   >
                     View Details
                   </button>
@@ -277,19 +309,19 @@ export default function Home() {
             className="flex justify-center items-center gap-3 mt-16"
           >
             <button 
-              onClick={() => setPage(p => Math.max(1, p - 1))} 
+              onClick={() => { setPage(p => Math.max(1, p - 1)); scrollToListings(); }} 
               disabled={page === 1}
-              className="bg-white border border-gray-200 text-brand px-5 py-2.5 rounded-xl font-bold hover:border-brand disabled:opacity-50 transition-all shadow-sm flex items-center gap-1"
+              className="bg-white border border-gray-200 text-brand px-5 py-2.5 rounded-xl font-bold hover:border-accent disabled:opacity-50 transition-all shadow-sm flex items-center gap-1"
             >
               <ChevronLeft size={18}/> Prev
             </button>
-            <span className="font-bold text-gray-700 px-4">
+            <span className="font-bold text-brand px-4">
               {page} <span className="text-gray-400 font-medium">/ {totalPages}</span>
             </span>
             <button 
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))} 
+              onClick={() => { setPage(p => Math.min(totalPages, p + 1)); scrollToListings(); }} 
               disabled={page === totalPages}
-              className="bg-white border border-gray-200 text-brand px-5 py-2.5 rounded-xl font-bold hover:border-brand disabled:opacity-50 transition-all shadow-sm flex items-center gap-1"
+              className="bg-white border border-gray-200 text-brand px-5 py-2.5 rounded-xl font-bold hover:border-accent disabled:opacity-50 transition-all shadow-sm flex items-center gap-1"
             >
               Next <ChevronRight size={18}/>
             </button>
