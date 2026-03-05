@@ -19,7 +19,7 @@ export default function PropertyDetails() {
   const [checkOut, setCheckOut] = useState('');
   const [nights, setNights] = useState(0);
 
-  // --- NEW: CHECKOUT MODAL & ADD-ONS STATE ---
+  // --- CHECKOUT MODAL & ADD-ONS STATE ---
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [selectedAddOns, setSelectedAddOns] = useState([]);
   const [bookingLoading, setBookingLoading] = useState(false);
@@ -55,7 +55,7 @@ export default function PropertyDetails() {
     }
   }, [checkIn, checkOut]);
 
-  // --- NEW: INITIATE CHECKOUT (OPENS MODAL) ---
+  // --- INITIATE CHECKOUT (OPENS MODAL) ---
   const handleInitiateCheckout = () => {
     if (!isAuthenticated) {
       toast.error("Please login to book a property.");
@@ -70,7 +70,7 @@ export default function PropertyDetails() {
     setIsCheckoutModalOpen(true);
   };
 
-  // --- NEW: TOGGLE ADD-ON IN MODAL ---
+  // --- TOGGLE ADD-ON IN MODAL ---
   const toggleAddOn = (addon) => {
     const exists = selectedAddOns.find(a => a.id === addon.id);
     if (exists) {
@@ -80,7 +80,7 @@ export default function PropertyDetails() {
     }
   };
 
-  // --- NEW: CONFIRM BOOKING TO BACKEND ---
+  // --- CONFIRM BOOKING TO BACKEND ---
   const handleConfirmBooking = async () => {
     setBookingLoading(true);
     try {
@@ -106,11 +106,14 @@ export default function PropertyDetails() {
 
   if (!property) return null;
 
-  // --- PRICING MATH ---
+  // --- NEW: PRICING MATH WITH ESCROW ---
   const totalRoomPrice = property.pricePerNight * nights;
-  const platformFee = totalRoomPrice * 0.05; // 5% fee
+  const platformFee = totalRoomPrice * 0.05; // 5% platform fee
+  const cautionFee = property.cautionFee || 0; // Safely grab the caution fee
   const addOnsTotal = selectedAddOns.reduce((sum, addon) => sum + addon.price, 0);
-  const finalPrice = totalRoomPrice + platformFee + addOnsTotal;
+  
+  // Final calculation includes the refundable escrow deposit
+  const finalPrice = totalRoomPrice + platformFee + cautionFee + addOnsTotal;
 
   return (
     <div className="min-h-screen bg-white pb-24">
@@ -230,7 +233,6 @@ export default function PropertyDetails() {
                 </div>
               </div>
 
-              {/* FIX: Now opens modal instead of booking immediately */}
               <button 
                 onClick={handleInitiateCheckout}
                 disabled={nights <= 0}
@@ -252,6 +254,13 @@ export default function PropertyDetails() {
                     <span className="underline">Apartey service fee (5%)</span>
                     <span>₦{platformFee.toLocaleString()}</span>
                   </div>
+                  {/* --- NEW: CAUTION FEE PREVIEW --- */}
+                  {cautionFee > 0 && (
+                    <div className="flex justify-between text-brand font-medium">
+                      <span className="underline">Refundable Caution Fee</span>
+                      <span>₦{cautionFee.toLocaleString()}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -260,7 +269,7 @@ export default function PropertyDetails() {
         </div>
       </div>
 
-      {/* --- NEW: THE ENHANCE YOUR STAY CHECKOUT MODAL --- */}
+      {/* --- THE ENHANCE YOUR STAY CHECKOUT MODAL --- */}
       <AnimatePresence>
         {isCheckoutModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm">
@@ -311,6 +320,13 @@ export default function PropertyDetails() {
                     <span>Platform Fee (5%)</span>
                     <span>₦{platformFee.toLocaleString()}</span>
                   </div>
+                  {/* --- NEW: ESCROW LINE ITEM IN RECEIPT --- */}
+                  {cautionFee > 0 && (
+                    <div className="flex justify-between text-brand font-semibold pt-1">
+                      <span className="flex items-center gap-1"><ShieldCheck size={14}/> Caution Fee (Escrow)</span>
+                      <span>₦{cautionFee.toLocaleString()}</span>
+                    </div>
+                  )}
                   
                   {/* Dynamic Add-Ons List in Receipt */}
                   {selectedAddOns.length > 0 && (

@@ -8,7 +8,7 @@ import {
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import { HubConnectionBuilder, LogLevel } from '@microsoft/signalr'; 
+import BrandLoader from '../components/BrandLoader'; // <-- Imported the custom luxury loader!
 
 export default function Dashboard() {
   const { user, isAuthenticated } = useContext(AuthContext);
@@ -27,7 +27,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState({
-    title: '', description: '', type: 'Apartment', pricePerNight: '', city: '', state: '', area: ''
+    title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: ''
   });
 
   const [selectedImages, setSelectedImages] = useState([]);
@@ -159,7 +159,6 @@ export default function Dashboard() {
           const response = await api.get('/Verification/status');
           setVerificationData(response.data);
         } catch (error) {
-          // If the endpoint doesn't exist yet, we default to 'Unverified'
           setVerificationData({ status: 'Unverified' });
         } finally {
           setFetchingVerification(false);
@@ -187,6 +186,7 @@ export default function Dashboard() {
       submitData.append('description', formData.description);
       submitData.append('type', formData.type);
       submitData.append('pricePerNight', formData.pricePerNight);
+      submitData.append('cautionFee', formData.cautionFee || 0);
       submitData.append('city', formData.city);
       submitData.append('state', formData.state);
       submitData.append('area', formData.area);
@@ -201,7 +201,7 @@ export default function Dashboard() {
       toast.success('Property listed successfully!');
       
       setIsAddingListing(false); 
-      setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', city: '', state: '', area: '' });
+      setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '' });
       setSelectedImages([]); setSelectedAmenities([]); setSelectedRules([]); setAddOns([]);
       
       if (activeTab === 'listings') { setActiveTab('overview'); setTimeout(() => setActiveTab('listings'), 100); }
@@ -255,10 +255,7 @@ export default function Dashboard() {
     try {
       const kycFormData = new FormData();
       kycFormData.append('document', kycFile);
-      kycFormData.append('documentType', kycDocType); // We will pass the type to the backend later
-      
-      // Simulate backend call for now until we build the controller
-      // await api.post('/Verification/upload', kycFormData, { headers: { 'Content-Type': 'multipart/form-data' } });
+      kycFormData.append('documentType', kycDocType);
       
       setTimeout(() => {
         toast.success("Verification request submitted successfully! Our team is reviewing it.");
@@ -278,14 +275,15 @@ export default function Dashboard() {
     { id: 'listings', icon: HomeIcon, label: 'Listings' },
     { id: 'bookings', icon: ClipboardList, label: 'Bookings' },
     { id: 'earnings', icon: Wallet, label: 'Earnings & Payouts' },
-    { id: 'verification', icon: ShieldCheck, label: 'Trust & Verification' }, // We brought it back!
+    { id: 'verification', icon: ShieldCheck, label: 'Trust & Verification' },
     { id: 'settings', icon: Settings, label: 'Settings' },
   ];
 
   // --- TAB RENDERERS ---
 
   const renderOverview = () => {
-    if (fetchingOverview || !overview) return <div className="text-center py-20 text-brand font-bold animate-pulse">Loading Analytics Engine...</div>;
+    // UPDATED LOADER
+    if (fetchingOverview || !overview) return <BrandLoader />;
 
     return (
       <div className="space-y-6 animate-fade-in">
@@ -352,8 +350,9 @@ export default function Dashboard() {
             </button>
           </div>
           
+           {/* UPDATED LOADER */}
            {fetchingListings ? (
-            <div className="text-center py-12 text-gray-500 font-bold animate-pulse">Loading your portfolio...</div>
+            <BrandLoader />
           ) : hostProperties.length === 0 ? (
             <div className="bg-white border border-gray-200 rounded-xl p-12 text-center shadow-sm">
               <HomeIcon size={48} className="mx-auto text-gray-300 mb-4" />
@@ -412,8 +411,9 @@ export default function Dashboard() {
           </button>
         </div>
         
+        {/* UPDATED LOADER */}
         {fetchingBookings ? (
-          <div className="text-center py-12 text-gray-500 font-bold animate-pulse">Loading reservations...</div>
+          <BrandLoader />
         ) : bookings.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-xl p-12 text-center shadow-sm">
             <ClipboardList size={48} className="mx-auto text-gray-300 mb-4" />
@@ -528,8 +528,9 @@ export default function Dashboard() {
         <p className="text-gray-500 text-sm">Become a Premium Host to unlock unlimited listings and higher visibility.</p>
       </div>
 
+      {/* UPDATED LOADER */}
       {fetchingVerification ? (
-         <div className="text-center py-12 text-gray-500 font-bold animate-pulse">Loading status...</div>
+         <BrandLoader />
       ) : verificationData.status === 'Verified' ? (
          <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center shadow-sm">
            <ShieldCheck size={48} className="mx-auto text-green-500 mb-4" />
