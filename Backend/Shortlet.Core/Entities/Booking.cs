@@ -24,6 +24,10 @@ namespace Shortlet.Core.Entities
         public string PaymentReference { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+                // --- ESCROW & CAUTION FEE TRACKING ---
+        public decimal CautionFeeAmount { get; set; } = 0;
+        public string CautionFeeStatus { get; set; } = "None"; // None, Held, Refunded, Claimed
+
 
         public ICollection<BookingAddOn> PurchasedAddOns { get; set; } = new List<BookingAddOn>();
     }

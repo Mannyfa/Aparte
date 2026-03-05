@@ -14,6 +14,7 @@ namespace Shortlet.Core.Entities
         public string Description { get; set; } = string.Empty;
         public string Type { get; set; } = string.Empty;
         public decimal PricePerNight { get; set; }
+        public decimal CautionFee { get; set; } = 0;
         
         // Location data
         public string State { get; set; } = string.Empty;
