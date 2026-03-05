@@ -131,6 +131,9 @@ namespace Shortlet.Api.Controllers
                     State = request.State,
                     Area = request.Area,
                     ImageUrls = imageUrls,
+                    
+                    CautionFee = string.IsNullOrEmpty(Request.Form["cautionFee"]) ? 0 : decimal.Parse(Request.Form["cautionFee"]),
+
                     // Convert comma-separated strings back into real Lists!
                     Amenities = string.IsNullOrEmpty(request.Amenities) ? new List<string>() : request.Amenities.Split(',').ToList(),
                     HouseRules = string.IsNullOrEmpty(request.HouseRules) ? new List<string>() : request.HouseRules.Split(',').ToList(),
