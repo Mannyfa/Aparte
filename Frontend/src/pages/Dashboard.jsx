@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, Home as HomeIcon, Calendar, ClipboardList, 
   MessageSquare, Wallet, Star, ShieldCheck, Settings, Plus, Upload, 
-  TrendingUp, AlertCircle, Key, XCircle, Check, User, RefreshCw, ConciergeBell
+  TrendingUp, AlertCircle, Key, XCircle, Check, User, RefreshCw, ConciergeBell, MapPin
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import BrandLoader from '../components/BrandLoader'; // <-- Imported the custom luxury loader!
+import BrandLoader from '../components/BrandLoader'; 
 
 export default function Dashboard() {
   const { user, isAuthenticated } = useContext(AuthContext);
@@ -282,7 +282,6 @@ export default function Dashboard() {
   // --- TAB RENDERERS ---
 
   const renderOverview = () => {
-    // UPDATED LOADER
     if (fetchingOverview || !overview) return <BrandLoader />;
 
     return (
@@ -350,7 +349,6 @@ export default function Dashboard() {
             </button>
           </div>
           
-           {/* UPDATED LOADER */}
            {fetchingListings ? (
             <BrandLoader />
           ) : hostProperties.length === 0 ? (
@@ -386,9 +384,120 @@ export default function Dashboard() {
           )}
         </>
       ) : (
-        <div className="bg-white p-8 rounded-xl shadow-md border border-gray-100 text-center">
-           <h2 className="text-2xl font-bold">Return to overview or cancel to exit adding.</h2>
-           <button onClick={() => setIsAddingListing(false)} className="text-red-500 font-bold mt-4">Cancel</button>
+        // --- RESTORED: THE FULL ADD LISTING FORM ---
+        <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100 animate-fade-in max-w-4xl mx-auto">
+          <div className="flex justify-between items-center mb-8 border-b border-gray-100 pb-4">
+            <div>
+              <h2 className="text-2xl font-black text-brand">Create New Listing</h2>
+              <p className="text-sm text-gray-500">Fill in the details below to publish your property.</p>
+            </div>
+            <button onClick={() => setIsAddingListing(false)} className="text-gray-400 hover:text-red-500 transition-colors p-2">
+              <XCircle size={28} />
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-10">
+            
+            {/* 1. Basic Details */}
+            <section>
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><HomeIcon size={18} className="text-accent" /> Property Details</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-gray-50 p-6 rounded-xl border border-gray-100">
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Property Title</label>
+                  <input required type="text" name="title" value={formData.title} onChange={handleInputChange} placeholder="e.g. Luxury 4-Bed Penthouse with Pool" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Description</label>
+                  <textarea required name="description" rows="3" value={formData.description} onChange={handleInputChange} placeholder="Describe the vibe, layout, and unique features..." className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none"></textarea>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Property Type</label>
+                  <select name="type" value={formData.type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none">
+                    <option value="Apartment">Apartment</option>
+                    <option value="Penthouse">Penthouse</option>
+                    <option value="Duplex">Duplex</option>
+                    <option value="Studio">Studio</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Price Per Night (₦)</label>
+                  <input required type="number" name="pricePerNight" value={formData.pricePerNight} onChange={handleInputChange} placeholder="e.g. 150000" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
+                </div>
+                
+                {/* THE NEW CAUTION FEE ESCROW FIELD */}
+                <div className="md:col-span-2 bg-white p-4 rounded-lg border border-brand/20 shadow-sm">
+                  <label className="block text-sm font-bold text-brand mb-1 items-center gap-2"><ShieldCheck size={16}/> Refundable Caution Fee (₦)</label>
+                  <p className="text-xs text-gray-500 mb-3">This amount will be charged to the guest and held securely in Apartey Escrow. It is refunded if no damage is reported.</p>
+                  <input type="number" name="cautionFee" value={formData.cautionFee} onChange={handleInputChange} placeholder="e.g. 50000" className="w-full md:w-1/2 border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
+                </div>
+              </div>
+            </section>
+
+            {/* 2. Location */}
+            <section>
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><MapPin size={18} className="text-accent" /> Location</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-gray-50 p-6 rounded-xl border border-gray-100">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">State</label>
+                  <input required type="text" name="state" value={formData.state} onChange={handleInputChange} placeholder="e.g. Lagos" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">City</label>
+                  <input required type="text" name="city" value={formData.city} onChange={handleInputChange} placeholder="e.g. Lekki" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-2">Area / Estate</label>
+                  <input required type="text" name="area" value={formData.area} onChange={handleInputChange} placeholder="e.g. Phase 1" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
+                </div>
+              </div>
+            </section>
+
+            {/* 3. Features & Amenities */}
+            <section>
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Star size={18} className="text-accent" /> Premium Amenities</h3>
+              <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {availableAmenities.map(amenity => (
+                  <label key={amenity} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={selectedAmenities.includes(amenity)}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedAmenities([...selectedAmenities, amenity]);
+                        else setSelectedAmenities(selectedAmenities.filter(a => a !== amenity));
+                      }}
+                      className="w-5 h-5 rounded border-gray-300 text-brand focus:ring-brand cursor-pointer"
+                    />
+                    <span className="text-sm font-medium text-gray-700 group-hover:text-brand transition-colors">{amenity}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            {/* 4. Photos */}
+            <section>
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Upload size={18} className="text-accent" /> Property Photos</h3>
+              <div className="border-2 border-dashed border-gray-300 rounded-2xl p-10 text-center hover:bg-gray-50 transition-colors bg-white">
+                <input type="file" multiple accept="image/*" onChange={(e) => setSelectedImages(Array.from(e.target.files))} className="hidden" id="property-images" />
+                <label htmlFor="property-images" className="cursor-pointer flex flex-col items-center">
+                  <div className="bg-brand/5 p-4 rounded-full mb-4">
+                    <Upload size={32} className="text-brand" />
+                  </div>
+                  <span className="text-base font-bold text-brand">{selectedImages.length > 0 ? `${selectedImages.length} highly curated images selected` : 'Click to browse images'}</span>
+                  <span className="text-sm text-gray-500 mt-2">Upload high-quality JPEGs or PNGs</span>
+                </label>
+              </div>
+            </section>
+
+            {/* Actions */}
+            <div className="pt-6 border-t border-gray-200 flex justify-end gap-4">
+              <button type="button" onClick={() => setIsAddingListing(false)} className="px-6 py-3 rounded-xl font-bold text-gray-600 hover:bg-gray-100 transition-colors">Cancel</button>
+              <button type="submit" disabled={loading} className="bg-brand hover:bg-gray-900 text-white px-10 py-3 rounded-xl font-bold transition-colors shadow-lg flex items-center gap-2 disabled:opacity-70 text-lg">
+                {loading ? <RefreshCw size={20} className="animate-spin" /> : <Check size={20} />}
+                {loading ? 'Publishing...' : 'Publish Listing'}
+              </button>
+            </div>
+            
+          </form>
         </div>
       )}
     </div>
@@ -411,7 +520,6 @@ export default function Dashboard() {
           </button>
         </div>
         
-        {/* UPDATED LOADER */}
         {fetchingBookings ? (
           <BrandLoader />
         ) : bookings.length === 0 ? (
@@ -528,7 +636,6 @@ export default function Dashboard() {
         <p className="text-gray-500 text-sm">Become a Premium Host to unlock unlimited listings and higher visibility.</p>
       </div>
 
-      {/* UPDATED LOADER */}
       {fetchingVerification ? (
          <BrandLoader />
       ) : verificationData.status === 'Verified' ? (
