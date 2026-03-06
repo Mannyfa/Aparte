@@ -156,7 +156,9 @@ namespace Shortlet.Api.Controllers
         public async Task<IActionResult> GetProperties()
         {
             var properties = await _context.Properties.Include(p => p.Host).Include(p => p.AddOns).OrderByDescending(p => p.Id).Select(p => new {
-                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
+                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, 
+                p.CautionFee, // <-- REVEALING ESCROW FEE TO FRONTEND!
+                p.City, p.State, p.Area,
                 ImageUrls = p.ImageUrls,
                 Amenities = p.Amenities,
                 HouseRules = p.HouseRules,
@@ -175,7 +177,9 @@ namespace Shortlet.Api.Controllers
                 .Include(p => p.Host)
                 .Include(p => p.AddOns) // Load the AddOns from the DB
                 .Select(p => new {
-                    p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
+                    p.Id, p.Title, p.Description, p.Type, p.PricePerNight, 
+                    p.CautionFee, // <-- REVEALING ESCROW FEE TO FRONTEND!
+                    p.City, p.State, p.Area,
                     ImageUrls = p.ImageUrls,
                     Amenities = p.Amenities,
                     HouseRules = p.HouseRules,
@@ -200,7 +204,9 @@ namespace Shortlet.Api.Controllers
 
             var totalItems = await query.CountAsync();
             var properties = await query.Include(p => p.Host).Include(p => p.AddOns).OrderByDescending(p => p.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(p => new {
-                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, p.City, p.State, p.Area,
+                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, 
+                p.CautionFee, // <-- REVEALING ESCROW FEE TO FRONTEND!
+                p.City, p.State, p.Area,
                 ImageUrls = p.ImageUrls,
                 Amenities = p.Amenities,
                 HouseRules = p.HouseRules,

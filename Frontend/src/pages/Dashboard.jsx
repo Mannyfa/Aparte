@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, Home as HomeIcon, Calendar, ClipboardList, 
   MessageSquare, Wallet, Star, ShieldCheck, Settings, Plus, Upload, 
-  TrendingUp, AlertCircle, Key, XCircle, Check, User, RefreshCw, ConciergeBell, MapPin
+  TrendingUp, AlertCircle, Key, XCircle, Check, User, RefreshCw, ConciergeBell, MapPin, X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
@@ -33,7 +33,10 @@ export default function Dashboard() {
   const [selectedImages, setSelectedImages] = useState([]);
   const [selectedAmenities, setSelectedAmenities] = useState([]);
   const [selectedRules, setSelectedRules] = useState([]);
+  
+  // ADD-ONS STATE
   const [addOns, setAddOns] = useState([]); 
+  const [newAddOn, setNewAddOn] = useState({ name: '', description: '', price: '' });
 
   const availableAmenities = ["Starlink High-Speed WiFi", "24/7 Power (Gen + Inverter)", "24/7 Estate Security", "65\" Smart TV with Netflix", "Free secure parking", "Fully equipped kitchen", "Swimming Pool", "Gym Access"];
   const availableRules = ["Check-in: 2:00 PM - 10:00 PM", "Checkout before 11:00 AM", "No parties or events allowed.", "Smoking is strictly prohibited inside.", "No pets allowed."];
@@ -54,26 +57,14 @@ export default function Dashboard() {
   const [overview, setOverview] = useState(null);
   const [fetchingOverview, setFetchingOverview] = useState(true);
 
-  // SOFT LIFE: State for tracking which booking is currently expanded
   const [expandedBookingId, setExpandedBookingId] = useState(null);
 
-  // SOFT LIFE: Helper to safely parse the add-ons from the database
   const parseAddOns = (addOnsData) => {
     if (!addOnsData) return [];
     if (Array.isArray(addOnsData)) return addOnsData;
     try { return JSON.parse(addOnsData); } catch (e) { return []; }
   };
 
-  const [chatConnection, setChatConnection] = useState(null);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState('');
-  const [activeChatUser, setActiveChatUser] = useState(null);
-  const [chatContacts, setChatContacts] = useState([]); 
-  const [fetchingContacts, setFetchingContacts] = useState(false);
-  const [fetchingHistory, setFetchingHistory] = useState(false);
-  const messagesEndRef = useRef(null);
-
-  // KYC States
   const [verificationData, setVerificationData] = useState({ status: 'Unverified', documentUrl: null });
   const [fetchingVerification, setFetchingVerification] = useState(false);
   const [kycFile, setKycFile] = useState(null);
@@ -82,7 +73,6 @@ export default function Dashboard() {
   const [uploadingKyc, setUploadingKyc] = useState(false);
 
   // --- EFFECTS ---
-
   useEffect(() => {
     if (activeTab === 'overview') {
       const fetchOverview = async () => {
@@ -175,6 +165,19 @@ export default function Dashboard() {
   // --- HANDLERS ---
   const handleInputChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
+  // Add-On List Handlers
+  const handleAddAddOn = () => {
+    if (!newAddOn.name || !newAddOn.price) {
+      return toast.error("Please enter a name and price for the Add-on.");
+    }
+    setAddOns([...addOns, { id: Date.now().toString(), name: newAddOn.name, description: newAddOn.description, price: Number(newAddOn.price) }]);
+    setNewAddOn({ name: '', description: '', price: '' });
+  };
+
+  const removeAddOn = (id) => {
+    setAddOns(addOns.filter(a => a.id !== id));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (selectedImages.length === 0) return toast.error("Please upload at least one image.");
@@ -192,7 +195,8 @@ export default function Dashboard() {
       submitData.append('area', formData.area);
       
       submitData.append('amenities', selectedAmenities.join(','));
-      submitData.append('houseRules', selectedRules.join(','));
+      submitData.append('houseRules', selectedRules.join(',')); // Added rules to submit
+      
       submitData.append('AddOnsJson', JSON.stringify(addOns));
 
       selectedImages.forEach(image => submitData.append('images', image));
@@ -202,7 +206,7 @@ export default function Dashboard() {
       
       setIsAddingListing(false); 
       setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '' });
-      setSelectedImages([]); setSelectedAmenities([]); setSelectedRules([]); setAddOns([]);
+      setSelectedImages([]); setSelectedAmenities([]); setSelectedRules([]); setAddOns([]); setNewAddOn({ name: '', description: '', price: '' });
       
       if (activeTab === 'listings') { setActiveTab('overview'); setTimeout(() => setActiveTab('listings'), 100); }
     } catch (error) {
@@ -245,7 +249,6 @@ export default function Dashboard() {
     }
   };
 
-  // --- NEW: ADVANCED KYC SUBMIT ---
   const handleKycSubmit = async (e) => {
     e.preventDefault();
     if (!kycFile) return toast.error("Please select a document to upload.");
@@ -280,7 +283,6 @@ export default function Dashboard() {
   ];
 
   // --- TAB RENDERERS ---
-
   const renderOverview = () => {
     if (fetchingOverview || !overview) return <BrandLoader />;
 
@@ -384,7 +386,6 @@ export default function Dashboard() {
           )}
         </>
       ) : (
-        // --- RESTORED: THE FULL ADD LISTING FORM ---
         <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100 animate-fade-in max-w-4xl mx-auto">
           <div className="flex justify-between items-center mb-8 border-b border-gray-100 pb-4">
             <div>
@@ -424,9 +425,8 @@ export default function Dashboard() {
                   <input required type="number" name="pricePerNight" value={formData.pricePerNight} onChange={handleInputChange} placeholder="e.g. 150000" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
                 </div>
                 
-                {/* THE NEW CAUTION FEE ESCROW FIELD */}
                 <div className="md:col-span-2 bg-white p-4 rounded-lg border border-brand/20 shadow-sm">
-                  <label className="block text-sm font-bold text-brand mb-1 items-center gap-2"><ShieldCheck size={16}/> Refundable Caution Fee (₦)</label>
+                  <label className="block text-sm font-bold text-brand mb-1 flex items-center gap-2"><ShieldCheck size={16}/> Refundable Caution Fee (₦)</label>
                   <p className="text-xs text-gray-500 mb-3">This amount will be charged to the guest and held securely in Apartey Escrow. It is refunded if no damage is reported.</p>
                   <input type="number" name="cautionFee" value={formData.cautionFee} onChange={handleInputChange} placeholder="e.g. 50000" className="w-full md:w-1/2 border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
                 </div>
@@ -473,7 +473,97 @@ export default function Dashboard() {
               </div>
             </section>
 
-            {/* 4. Photos */}
+            {/* --- RESTORED: 4. House Rules --- */}
+            <section>
+              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><AlertCircle size={18} className="text-accent" /> House Rules</h3>
+              <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {availableRules.map(rule => (
+                  <label key={rule} className="flex items-center gap-3 cursor-pointer group">
+                    <input
+                      type="checkbox"
+                      checked={selectedRules.includes(rule)}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedRules([...selectedRules, rule]);
+                        else setSelectedRules(selectedRules.filter(r => r !== rule));
+                      }}
+                      className="w-5 h-5 rounded border-gray-300 text-brand focus:ring-brand cursor-pointer"
+                    />
+                    <span className="text-sm font-medium text-gray-700 group-hover:text-brand transition-colors">{rule}</span>
+                  </label>
+                ))}
+              </div>
+            </section>
+
+            {/* 5. PREMIUM ADD-ONS (SOFT LIFE) */}
+            <section>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  <ConciergeBell size={18} className="text-accent" /> Premium Add-Ons (Soft Life)
+                </h3>
+              </div>
+              <div className="bg-brand/5 p-6 rounded-xl border border-brand/10">
+                <p className="text-sm text-gray-600 mb-4">Offer luxury extras like a Private Chef, Airport Pickup, or PS5 Rental. You keep 100% of these earnings.</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                  <div className="md:col-span-1">
+                    <input 
+                      type="text" 
+                      placeholder="Service Name (e.g. PS5)" 
+                      value={newAddOn.name} 
+                      onChange={(e) => setNewAddOn({...newAddOn, name: e.target.value})} 
+                      className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-brand outline-none" 
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <input 
+                      type="text" 
+                      placeholder="Short description..." 
+                      value={newAddOn.description} 
+                      onChange={(e) => setNewAddOn({...newAddOn, description: e.target.value})} 
+                      className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-brand outline-none" 
+                    />
+                  </div>
+                  <div className="md:col-span-1 flex gap-2">
+                    <input 
+                      type="number" 
+                      placeholder="Price (₦)" 
+                      value={newAddOn.price} 
+                      onChange={(e) => setNewAddOn({...newAddOn, price: e.target.value})} 
+                      className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-brand outline-none" 
+                    />
+                    <button 
+                      type="button" 
+                      onClick={handleAddAddOn} 
+                      className="bg-brand text-white px-4 rounded-lg font-bold hover:bg-gray-800 transition-colors shadow-sm"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+
+                {addOns.length > 0 && (
+                  <div className="space-y-2 mt-6 pt-4 border-t border-brand/10">
+                    {addOns.map((addon) => (
+                      <div key={addon.id} className="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm border border-gray-100">
+                        <div>
+                          <p className="font-bold text-brand text-sm">{addon.name} <span className="text-accent ml-2">₦{addon.price.toLocaleString()}</span></p>
+                          <p className="text-xs text-gray-500">{addon.description}</p>
+                        </div>
+                        <button 
+                          type="button" 
+                          onClick={() => removeAddOn(addon.id)} 
+                          className="text-red-500 hover:bg-red-50 p-1.5 rounded-md transition-colors"
+                        >
+                          <X size={16}/>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* 6. Photos */}
             <section>
               <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Upload size={18} className="text-accent" /> Property Photos</h3>
               <div className="border-2 border-dashed border-gray-300 rounded-2xl p-10 text-center hover:bg-gray-50 transition-colors bg-white">
@@ -503,6 +593,7 @@ export default function Dashboard() {
     </div>
   );
 
+// ... (Rest of your component logic stays exactly the same)
   const renderBookings = () => (
      <div className="animate-fade-in space-y-6">
         <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
@@ -564,12 +655,10 @@ export default function Dashboard() {
                      </div>
                    </div>
 
-                   {/* --- EXPANDED DETAILS SECTION (SOFT LIFE UPGRADE) --- */}
                    {isExpanded && (
                      <div className="mt-6 pt-6 border-t border-gray-100 animate-fade-in">
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                          
-                         {/* Guest Info */}
                          <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
                            <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Guest Information</h4>
                            <p className="font-bold text-gray-800">{booking.guestName || 'Apartey Guest'}</p>
@@ -581,7 +670,6 @@ export default function Dashboard() {
                            )}
                          </div>
 
-                         {/* Add-ons Info */}
                          <div className="bg-brand/5 p-4 rounded-xl border border-brand/10">
                            <h4 className="text-xs font-bold text-brand uppercase tracking-wider mb-3">Requested Add-ons</h4>
                            {selectedAddOns.length > 0 ? (
