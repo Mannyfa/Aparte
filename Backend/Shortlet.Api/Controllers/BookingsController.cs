@@ -55,6 +55,19 @@ namespace Shortlet.Api.Controllers
                 var nights = (int)(request.CheckOut.Date - request.CheckIn.Date).TotalDays;
                 if (nights <= 0) return BadRequest(new { message = "Invalid check-in/out dates." });
 
+                // --- 1.5 DOUBLE-BOOKING GUARDRAIL ---
+                var isOverlapping = await _context.Bookings.AnyAsync(b =>
+                    b.PropertyId == request.PropertyId &&
+                    (b.Status == "paid" || b.Status == "confirmed" || b.Status == "pending") &&
+                    // Date Math: New check-in is before their checkout AND New checkout is after their check-in
+                    request.CheckIn < b.CheckOut && request.CheckOut > b.CheckIn
+                );
+
+                if (isOverlapping)
+                {
+                    return BadRequest(new { message = "Oops! Some of these dates were just booked by someone else." });
+                }
+
                 // --- 2. CALCULATE BASE PRICE & PLATFORM FEE ---
                 var totalRoomPrice = property.PricePerNight * nights;
                 var platformFee = totalRoomPrice * 0.05m; // Platform only taxes the room!

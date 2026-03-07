@@ -227,5 +227,31 @@ namespace Shortlet.Api.Controllers
             var properties = await _context.Properties.Include(p => p.AddOns).Where(p => p.HostId == hostId).OrderByDescending(p => p.Id).ToListAsync();
             return Ok(properties);
         }
+
+
+        [HttpGet("{id}/booked-dates")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetBookedDates(Guid id)
+        {
+            // Fetch all bookings for this property that are either paid or pending (currently checking out)
+            var bookings = await _context.Bookings
+                .Where(b => b.PropertyId == id && (b.Status == "paid" || b.Status == "confirmed" || b.Status == "pending"))
+                .ToListAsync();
+
+            var bookedDates = new List<string>();
+
+            foreach (var booking in bookings)
+            {
+                // Loop from CheckIn date up to (but not including) CheckOut date.
+                // We don't block the checkout day because a new guest can check in that afternoon!
+                for (var date = booking.CheckIn.Date; date < booking.CheckOut.Date; date = date.AddDays(1))
+                {
+                    bookedDates.Add(date.ToString("yyyy-MM-dd"));
+                }
+            }
+
+            // Return unique dates to avoid duplicates
+            return Ok(bookedDates.Distinct());
+        }
     }
 }
