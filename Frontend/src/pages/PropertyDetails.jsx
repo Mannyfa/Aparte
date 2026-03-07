@@ -6,6 +6,10 @@ import toast from 'react-hot-toast';
 import api from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
 
+// --- NEW IMPORTS FOR SMART CALENDAR ---
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
+
 export default function PropertyDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -14,21 +18,30 @@ export default function PropertyDetails() {
   const [property, setProperty] = useState(null);
   const [loading, setLoading] = useState(true);
   
-  // Booking Form State
-  const [checkIn, setCheckIn] = useState('');
-  const [checkOut, setCheckOut] = useState('');
+  // --- SMART CALENDAR STATE ---
+  const [checkIn, setCheckIn] = useState(null); // Now holds actual Date objects
+  const [checkOut, setCheckOut] = useState(null);
   const [nights, setNights] = useState(0);
+  const [bookedDates, setBookedDates] = useState([]); // Holds array of unavailable Dates
 
-  // --- CHECKOUT MODAL & ADD-ONS STATE ---
+  // Checkout Modal & Add-Ons State
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [selectedAddOns, setSelectedAddOns] = useState([]);
   const [bookingLoading, setBookingLoading] = useState(false);
 
   useEffect(() => {
-    const fetchProperty = async () => {
+    const fetchPropertyAndDates = async () => {
       try {
-        const response = await api.get(`/Properties/${id}`);
-        setProperty(response.data);
+        // 1. Fetch Property Details
+        const propResponse = await api.get(`/Properties/${id}`);
+        setProperty(propResponse.data);
+
+        // 2. Fetch Unavailable Dates from your new endpoint!
+        const datesResponse = await api.get(`/Properties/${id}/booked-dates`);
+        // Convert the "YYYY-MM-DD" strings into JavaScript Date objects
+        const unavailableDates = datesResponse.data.map(dateStr => new Date(dateStr));
+        setBookedDates(unavailableDates);
+
       } catch (error) {
         toast.error("Failed to load property details.");
         navigate('/');
@@ -36,26 +49,34 @@ export default function PropertyDetails() {
         setLoading(false);
       }
     };
-    fetchProperty();
+    fetchPropertyAndDates();
   }, [id, navigate]);
 
-  // Calculate nights when dates change
+  // Calculate nights when Date Objects change
   useEffect(() => {
     if (checkIn && checkOut) {
-      const start = new Date(checkIn);
-      const end = new Date(checkOut);
-      const diffTime = Math.abs(end - start);
+      const diffTime = Math.abs(checkOut - checkIn);
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
       
-      if (diffDays > 0 && start < end) {
+      if (diffDays > 0 && checkIn < checkOut) {
         setNights(diffDays);
       } else {
         setNights(0);
       }
+    } else {
+      setNights(0);
     }
   }, [checkIn, checkOut]);
 
-  // --- INITIATE CHECKOUT (OPENS MODAL) ---
+  // Calculate the maximum Check-Out date (so guests can't jump over an existing booking)
+  const getNextBookedDate = () => {
+    if (!checkIn) return null;
+    const futureBookings = bookedDates.filter(date => date > checkIn).sort((a, b) => a - b);
+    return futureBookings.length > 0 ? futureBookings[0] : null;
+  };
+
+  const maxCheckOutDate = getNextBookedDate();
+
   const handleInitiateCheckout = () => {
     if (!isAuthenticated) {
       toast.error("Please login to book a property.");
@@ -70,7 +91,6 @@ export default function PropertyDetails() {
     setIsCheckoutModalOpen(true);
   };
 
-  // --- TOGGLE ADD-ON IN MODAL ---
   const toggleAddOn = (addon) => {
     const exists = selectedAddOns.find(a => a.id === addon.id);
     if (exists) {
@@ -80,19 +100,17 @@ export default function PropertyDetails() {
     }
   };
 
-  // --- CONFIRM BOOKING TO BACKEND ---
   const handleConfirmBooking = async () => {
     setBookingLoading(true);
     try {
       const payload = { 
         propertyId: id, 
-        checkIn: new Date(checkIn).toISOString(), 
-        checkOut: new Date(checkOut).toISOString(),
-        // Send an array of just the IDs of the Add-Ons the guest chose
+        checkIn: checkIn.toISOString(), // Convert Date objects back to ISO for C#
+        checkOut: checkOut.toISOString(),
         addOnIds: selectedAddOns.map(a => a.id) 
       };
       const response = await api.post('/Bookings', payload);
-      window.location.href = response.data.paymentUrl; // Send to Paystack
+      window.location.href = response.data.paymentUrl; 
     } catch (error) {
       toast.error(error.response?.data?.message || "Booking failed.");
     } finally {
@@ -106,17 +124,45 @@ export default function PropertyDetails() {
 
   if (!property) return null;
 
-  // --- NEW: PRICING MATH WITH ESCROW ---
+  // Pricing Math
   const totalRoomPrice = property.pricePerNight * nights;
-  const platformFee = totalRoomPrice * 0.05; // 5% platform fee
-  const cautionFee = property.cautionFee || 0; // Safely grab the caution fee
+  const platformFee = totalRoomPrice * 0.05; 
+  const cautionFee = property.cautionFee || 0; 
   const addOnsTotal = selectedAddOns.reduce((sum, addon) => sum + addon.price, 0);
-  
-  // Final calculation includes the refundable escrow deposit
   const finalPrice = totalRoomPrice + platformFee + cautionFee + addOnsTotal;
 
   return (
     <div className="min-h-screen bg-white pb-24">
+      {/* --- CUSTOM CSS FOR REACT-DATEPICKER --- */}
+      <style>{`
+        .react-datepicker__day--selected, .react-datepicker__day--in-selecting-range, .react-datepicker__day--in-range,
+        .react-datepicker__month-text--selected, .react-datepicker__month-text--in-selecting-range, .react-datepicker__month-text--in-range {
+          background-color: #0f172a !important; /* Brand Color */
+          color: #d4af37 !important; /* Accent Color */
+          font-weight: bold;
+        }
+        .react-datepicker__day--keyboard-selected {
+          background-color: #0f172a !important;
+          color: white !important;
+        }
+        .react-datepicker__day--disabled {
+          color: #ccc !important;
+          text-decoration: line-through;
+        }
+        .react-datepicker {
+          font-family: inherit;
+          border: 1px solid #e5e7eb;
+          border-radius: 0.75rem;
+          box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
+        .react-datepicker__header {
+          background-color: white;
+          border-bottom: 1px solid #e5e7eb;
+          border-top-left-radius: 0.75rem !important;
+          border-top-right-radius: 0.75rem !important;
+        }
+      `}</style>
+
       <div className="max-w-7xl mx-auto px-6 lg:px-8 pt-8">
         
         {/* HEADER */}
@@ -210,24 +256,46 @@ export default function PropertyDetails() {
                 <span className="text-gray-500 font-medium"> / night</span>
               </div>
 
+              {/* --- NEW REACT-DATEPICKER UI --- */}
               <div className="border border-gray-300 rounded-xl overflow-hidden mb-4">
                 <div className="flex border-b border-gray-300">
-                  <div className="w-1/2 p-3 border-r border-gray-300">
-                    <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1">Check-in</label>
-                    <input 
-                      type="date" 
-                      min={new Date().toISOString().split('T')[0]}
-                      value={checkIn} onChange={(e) => setCheckIn(e.target.value)} 
-                      className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer" 
+                  
+                  {/* Check-In Picker */}
+                  <div className="w-1/2 p-3 border-r border-gray-300 relative cursor-pointer hover:bg-gray-50 transition-colors">
+                    <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1 cursor-pointer">Check-in</label>
+                    <DatePicker
+                      selected={checkIn}
+                      onChange={(date) => {
+                        setCheckIn(date);
+                        setCheckOut(null); // Reset checkout when checkin changes
+                      }}
+                      selectsStart
+                      startDate={checkIn}
+                      endDate={checkOut}
+                      minDate={new Date()} // Can't book the past
+                      excludeDates={bookedDates} // Grays out unavailable dates!
+                      placeholderText="Add date"
+                      dateFormat="MMM d, yyyy"
+                      className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer font-bold placeholder-gray-400"
                     />
                   </div>
-                  <div className="w-1/2 p-3">
-                    <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1">Checkout</label>
-                    <input 
-                      type="date" 
-                      min={checkIn || new Date().toISOString().split('T')[0]}
-                      value={checkOut} onChange={(e) => setCheckOut(e.target.value)} 
-                      className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer" 
+
+                  {/* Check-Out Picker */}
+                  <div className={`w-1/2 p-3 relative transition-colors ${!checkIn ? 'opacity-50 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'}`}>
+                    <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1 cursor-pointer">Checkout</label>
+                    <DatePicker
+                      selected={checkOut}
+                      onChange={(date) => setCheckOut(date)}
+                      selectsEnd
+                      startDate={checkIn}
+                      endDate={checkOut}
+                      minDate={checkIn ? new Date(checkIn.getTime() + 86400000) : new Date()} // Minimum is 1 day after check-in
+                      maxDate={maxCheckOutDate} // Prevents jumping over an existing booking!
+                      excludeDates={bookedDates}
+                      placeholderText="Add date"
+                      disabled={!checkIn} // Must select check-in first
+                      dateFormat="MMM d, yyyy"
+                      className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer font-bold placeholder-gray-400 disabled:cursor-not-allowed"
                     />
                   </div>
                 </div>
@@ -245,7 +313,7 @@ export default function PropertyDetails() {
 
               {/* Initial Price Preview */}
               {nights > 0 && (
-                <div className="mt-6 space-y-3 text-sm text-gray-600 border-t border-gray-200 pt-4">
+                <div className="mt-6 space-y-3 text-sm text-gray-600 border-t border-gray-200 pt-4 animate-fade-in">
                   <div className="flex justify-between">
                     <span className="underline">₦{property.pricePerNight.toLocaleString()} x {nights} nights</span>
                     <span>₦{totalRoomPrice.toLocaleString()}</span>
@@ -254,7 +322,6 @@ export default function PropertyDetails() {
                     <span className="underline">Apartey service fee (5%)</span>
                     <span>₦{platformFee.toLocaleString()}</span>
                   </div>
-                  {/* --- NEW: CAUTION FEE PREVIEW --- */}
                   {cautionFee > 0 && (
                     <div className="flex justify-between text-brand font-medium">
                       <span className="underline">Refundable Caution Fee</span>
@@ -304,7 +371,7 @@ export default function PropertyDetails() {
                   <div className="flex justify-between border-b border-gray-200 pb-4">
                     <div>
                       <p className="font-bold text-gray-900">Dates</p>
-                      <p className="text-sm text-gray-500">{new Date(checkIn).toLocaleDateString()} – {new Date(checkOut).toLocaleDateString()}</p>
+                      <p className="text-sm text-gray-500">{checkIn.toLocaleDateString()} – {checkOut.toLocaleDateString()}</p>
                     </div>
                     <span className="text-sm font-bold text-brand bg-brand/10 px-3 py-1 rounded-lg h-fit">{nights} Nights</span>
                   </div>
@@ -320,7 +387,6 @@ export default function PropertyDetails() {
                     <span>Platform Fee (5%)</span>
                     <span>₦{platformFee.toLocaleString()}</span>
                   </div>
-                  {/* --- NEW: ESCROW LINE ITEM IN RECEIPT --- */}
                   {cautionFee > 0 && (
                     <div className="flex justify-between text-brand font-semibold pt-1">
                       <span className="flex items-center gap-1"><ShieldCheck size={14}/> Caution Fee (Escrow)</span>
@@ -328,7 +394,6 @@ export default function PropertyDetails() {
                     </div>
                   )}
                   
-                  {/* Dynamic Add-Ons List in Receipt */}
                   {selectedAddOns.length > 0 && (
                     <div className="pt-3 border-t border-gray-200 space-y-2">
                       <p className="font-bold text-xs uppercase text-gray-400 tracking-wider">Lifestyle Add-Ons</p>
@@ -355,7 +420,6 @@ export default function PropertyDetails() {
                   <button onClick={() => setIsCheckoutModalOpen(false)} className="text-gray-400 hover:text-red-500 transition-colors p-2"><X size={24} /></button>
                 </div>
                 
-                {/* Mobile specific header */}
                 <h3 className="text-xl font-black text-brand mb-4 md:hidden pr-8">Enhance Your Stay</h3>
 
                 <p className="text-gray-500 mb-6">Make your trip unforgettable by adding luxury services provided directly by your host.</p>
@@ -397,7 +461,6 @@ export default function PropertyDetails() {
                 </div>
 
                 <div className="pt-4 border-t border-gray-100 mt-auto">
-                  {/* Mobile Total Preview */}
                   <div className="flex justify-between items-center mb-4 md:hidden">
                     <span className="font-bold text-gray-600">Grand Total</span>
                     <span className="font-black text-xl text-brand">₦{finalPrice.toLocaleString()}</span>
