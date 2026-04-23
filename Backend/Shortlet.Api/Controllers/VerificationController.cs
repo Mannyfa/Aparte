@@ -33,6 +33,8 @@ namespace Shortlet.Api.Controllers
             _cloudinary = new Cloudinary(account);
         }
 
+        
+
         [HttpGet("status")]
         public async Task<IActionResult> GetStatus()
         {
@@ -64,10 +66,11 @@ namespace Shortlet.Api.Controllers
 
                 if (user == null) return NotFound("User not found.");
 
-                // 1. Stream the file directly to Cloudinary
+               
+               
                 using var stream = document.OpenReadStream();
                 
-                // We use RawUploadParams instead of ImageUploadParams so it safely accepts PDFs too!
+                
                 var uploadParams = new RawUploadParams
                 {
                     File = new FileDescription(document.FileName, stream),
@@ -79,13 +82,13 @@ namespace Shortlet.Api.Controllers
                 if (uploadResult.Error != null)
                     return BadRequest(new { message = uploadResult.Error.Message });
 
-                // 2. Save the URL and Update Status
+                
                 user.IdDocumentUrl = uploadResult.SecureUrl.ToString();
                 
-                // Save the type of document they uploaded (NIN, Passport, etc.)
+                
                 user.IdDocumentType = documentType; 
                 
-                // Update to Pending so the Admin can review it and accept the 5% fee agreement
+                
                 user.VerificationStatus = "Pending"; 
 
                 await _context.SaveChangesAsync();
