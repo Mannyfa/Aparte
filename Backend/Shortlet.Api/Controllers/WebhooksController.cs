@@ -34,7 +34,7 @@ namespace Shortlet.Api.Controllers
         {
             try
             {
-                Console.WriteLine("🚨 DING DING DING! PAYSTACK JUST HIT THE WEBHOOK! 🚨");
+                Console.WriteLine("🚨 PAYSTACK WEBHOOK INITIATED 🚨");
                 
                 using var reader = new StreamReader(Request.Body);
                 var body = await reader.ReadToEndAsync();
@@ -55,94 +55,132 @@ namespace Shortlet.Api.Controllers
                     var reference = data.GetProperty("reference").GetString(); 
                     var guestEmail = data.GetProperty("customer").GetProperty("email").GetString();
 
-                    if (Guid.TryParse(reference, out Guid bookingId))
+                    Booking bookingToProcess = null;
+
+                    // =================================================================
+                    // BRANCH 1: APARTEY SPLIT (FRACTIONAL PAYMENT)
+                    // =================================================================
+                    if (reference.StartsWith("SPLIT_"))
                     {
-                        var booking = await _context.Bookings
-                            .Include(b => b.Property)
-                            .FirstOrDefaultAsync(b => b.Id == bookingId); 
-                        
-                        if (booking != null && booking.Status == "pending")
+                        var shareIdStr = reference.Substring(6); // Strip the prefix
+                        if (Guid.TryParse(shareIdStr, out Guid shareId))
                         {
-                            Console.WriteLine($"✅ Verified Booking {booking.Id}. Processing Escrow Math...");
-                            
-                            booking.Status = "paid";
+                            var share = await _context.SplitShares
+                                .Include(s => s.SplitGroup)
+                                .ThenInclude(sg => sg.Booking)
+                                .ThenInclude(b => b.Property)
+                                .FirstOrDefaultAsync(s => s.Id == shareId);
 
-                            // --- FINANCIAL LEDGER LOGIC START ---
-
-                            // 1. Lock the Escrow Vault
-                            if (booking.CautionFeeAmount > 0)
+                            if (share != null && share.Status == "Pending")
                             {
-                                booking.CautionFeeStatus = "Held";
-                                Console.WriteLine($"🔒 Escrow Locked: ₦{booking.CautionFeeAmount:N0} for Caution Fee.");
-                            }
+                                share.Status = "Paid";
+                                share.SplitGroup.PaidShares += 1;
+                                
+                                Console.WriteLine($"✅ Split Fraction Paid! ({share.SplitGroup.PaidShares}/{share.SplitGroup.TotalShares})");
 
-                            // 2. Sum up the Add-Ons (Host keeps 100% of these)
-                            decimal addOnsTotal = await _context.BookingAddOns
-                                .Where(a => a.BookingId == booking.Id)
-                                .SumAsync(a => a.Price);
-
-                            // 3. FLAWLESS SPLIT: Remove Escrow and Add-Ons to find the Room Rate + Fee
-                            decimal roomWithFee = booking.TotalPrice - booking.CautionFeeAmount - addOnsTotal;
-                            
-                            // 4. Extract the 5% Platform Fee from the room
-                            decimal roomRate = roomWithFee / 1.05m;
-                            decimal platformFee = roomWithFee - roomRate;
-
-                            // 5. Final Host Earnings (Room Rate + Add Ons)
-                            decimal hostEarnings = roomRate + addOnsTotal;
-
-                            // Find the Host's Wallet
-                            var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.HostId == booking.Property.HostId);
-                            if (wallet == null)
-                            {
-                                wallet = new Wallet { HostId = booking.Property.HostId, Balance = 0 };
-                                _context.Wallets.Add(wallet);
-                            }
-
-                            // Credit the Host's Wallet
-                            wallet.Balance += hostEarnings;
-                            wallet.UpdatedAt = DateTime.UtcNow;
-
-                            // Generate an immutable receipt
-                            var transaction = new Transaction
-                            {
-                                WalletId = wallet.Id,
-                                Amount = hostEarnings,
-                                Type = "Credit",
-                                Description = $"Room Earnings & Add-Ons (Escrow Held: ₦{booking.CautionFeeAmount})",
-                                Reference = booking.Id.ToString()
-                            };
-                            _context.Transactions.Add(transaction);
-
-                            // --- FINANCIAL LEDGER LOGIC END ---
-
-                            await _context.SaveChangesAsync();
-                            Console.WriteLine($"💰 Wallet updated! Host earned: ₦{hostEarnings:N0}");
-
-                            // FIRE THE EMAIL!
-                            try 
-                            {
-                                await _emailService.SendBookingConfirmationAsync(
-                                    guestEmail, 
-                                    "Valued Guest", 
-                                    booking.Property.Title, 
-                                    booking.CheckInCode
-                                );
-                                Console.WriteLine("📧 Confirmation Email Sent!");
-                            }
-                            catch (Exception emailEx)
-                            {
-                                Console.WriteLine($"⚠️ Database updated, but email failed: {emailEx.Message}");
+                                // IS THE GROUP FULLY FUNDED?
+                                if (share.SplitGroup.PaidShares == share.SplitGroup.TotalShares)
+                                {
+                                    Console.WriteLine("🎉 SPLIT GROUP COMPLETE! Unlocking Escrow & Booking...");
+                                    share.SplitGroup.Status = "Completed";
+                                    bookingToProcess = share.SplitGroup.Booking;
+                                    
+                                    // Send the confirmation email to the LEAD GUEST who originated the booking
+                                    var leadGuest = await _context.Users.FindAsync(bookingToProcess.GuestId);
+                                    if (leadGuest != null) guestEmail = leadGuest.Email; 
+                                }
+                                
+                                // Save the fractional progress even if it's not complete yet
+                                await _context.SaveChangesAsync(); 
                             }
                         }
-                        else
+                    }
+                    // =================================================================
+                    // BRANCH 2: STANDARD SOLO BOOKING
+                    // =================================================================
+                    else if (Guid.TryParse(reference, out Guid bookingId))
+                    {
+                        bookingToProcess = await _context.Bookings
+                            .Include(b => b.Property)
+                            .FirstOrDefaultAsync(b => b.Id == bookingId); 
+                    }
+
+                    // =================================================================
+                    // THE ESCROW & PAYOUT ENGINE (Runs when 100% funded)
+                    // =================================================================
+                    if (bookingToProcess != null && (bookingToProcess.Status == "pending" || bookingToProcess.Status == "split_pending"))
+                    {
+                        Console.WriteLine($"✅ 100% Funded for Booking {bookingToProcess.Id}. Processing Escrow Math...");
+                        
+                        bookingToProcess.Status = "paid";
+
+                        // 1. Lock the Escrow Vault
+                        if (bookingToProcess.CautionFeeAmount > 0)
                         {
-                            Console.WriteLine($"⚠️ Booking {bookingId} not found or already paid.");
+                            bookingToProcess.CautionFeeStatus = "Held";
+                            Console.WriteLine($"🔒 Escrow Locked: ₦{bookingToProcess.CautionFeeAmount:N0} for Caution Fee.");
+                        }
+
+                        // 2. Sum up the Add-Ons (Host keeps 100% of these)
+                        decimal addOnsTotal = await _context.BookingAddOns
+                            .Where(a => a.BookingId == bookingToProcess.Id)
+                            .SumAsync(a => a.Price);
+
+                        // 3. FLAWLESS SPLIT: Remove Escrow and Add-Ons to find the Room Rate + Fee
+                        decimal roomWithFee = bookingToProcess.TotalPrice - bookingToProcess.CautionFeeAmount - addOnsTotal;
+                        
+                        // 4. Extract the 5% Platform Fee from the room
+                        decimal roomRate = roomWithFee / 1.05m;
+                        decimal platformFee = roomWithFee - roomRate;
+
+                        // 5. Final Host Earnings (Room Rate + Add Ons)
+                        decimal hostEarnings = roomRate + addOnsTotal;
+
+                        // Find the Host's Wallet
+                        var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.HostId == bookingToProcess.Property.HostId);
+                        if (wallet == null)
+                        {
+                            wallet = new Wallet { HostId = bookingToProcess.Property.HostId, Balance = 0 };
+                            _context.Wallets.Add(wallet);
+                        }
+
+                        // Credit the Host's Wallet
+                        wallet.Balance += hostEarnings;
+                        wallet.UpdatedAt = DateTime.UtcNow;
+
+                        // Generate an immutable receipt
+                        var transaction = new Transaction
+                        {
+                            WalletId = wallet.Id,
+                            Amount = hostEarnings,
+                            Type = "Credit",
+                            Description = $"Room Earnings & Add-Ons (Escrow Held: ₦{bookingToProcess.CautionFeeAmount})",
+                            Reference = bookingToProcess.Id.ToString()
+                        };
+                        _context.Transactions.Add(transaction);
+
+                        await _context.SaveChangesAsync();
+                        Console.WriteLine($"💰 Wallet updated! Host earned: ₦{hostEarnings:N0}");
+
+                        // FIRE THE EMAIL!
+                        try 
+                        {
+                            await _emailService.SendBookingConfirmationAsync(
+                                guestEmail, 
+                                "Valued Guest", 
+                                bookingToProcess.Property.Title, 
+                                bookingToProcess.CheckInCode
+                            );
+                            Console.WriteLine("📧 Confirmation Email Sent to Lead Guest!");
+                        }
+                        catch (Exception emailEx)
+                        {
+                            Console.WriteLine($"⚠️ Database updated, but email failed: {emailEx.Message}");
                         }
                     }
                 }
 
-                return Ok(); 
+                return Ok(); // Always return 200 OK to Paystack
             }
             catch (Exception ex)
             {
