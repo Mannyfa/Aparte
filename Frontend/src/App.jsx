@@ -15,6 +15,7 @@ import Register from './pages/Register';
 import MyTrips from './pages/MyTrips';
 import PropertyDetails from './pages/PropertyDetails';
 import AdminDashboard from './pages/AdminDashboard';
+import SplitDashboard from './pages/SplitDashboard';
 
 
 
@@ -39,6 +40,7 @@ function App() {
             <Route path="/my-trips" element={<MyTrips />} />
             <Route path="/property/:id" element={<PropertyDetails />} />
             <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="/split-success/:id" element={<SplitDashboard />} />
           </Routes>
         </main>
 
