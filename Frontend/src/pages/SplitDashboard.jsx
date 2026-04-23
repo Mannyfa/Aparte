@@ -1,15 +1,28 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Users, Copy, CheckCircle, Clock, ShieldCheck, ArrowRight } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Users, Copy, CheckCircle, Clock, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api from '../utils/api';
 
 export default function SplitDashboard() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [splitData, setSplitData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [payingShareId, setPayingShareId] = useState(null);
+
+  // Catch the return from Paystack
+  useEffect(() => {
+    const reference = searchParams.get('reference');
+    const trxref = searchParams.get('trxref');
+    if (reference || trxref) {
+      toast.success("Payment processing! Verifying with Escrow...", { id: 'payment-success' });
+      searchParams.delete('reference');
+      searchParams.delete('trxref');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     const fetchSplit = async () => {
@@ -23,7 +36,12 @@ export default function SplitDashboard() {
         setLoading(false);
       }
     };
-    fetchSplit();
+
+    fetchSplit(); // Initial load
+    
+    // THE MAGIC: Auto-refresh the dashboard every 5 seconds
+    const interval = setInterval(fetchSplit, 5000); 
+    return () => clearInterval(interval);
   }, [id, navigate]);
 
   const copyLink = (shareId) => {
@@ -33,7 +51,6 @@ export default function SplitDashboard() {
   };
 
   const handlePayShare = async (shareId) => {
-    
     const email = prompt("Enter your email address for the receipt:");
     if (!email) return;
 
@@ -48,7 +65,7 @@ export default function SplitDashboard() {
   };
 
   if (loading) {
-    return <div className="min-h-screen flex justify-center items-center"><div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin"></div></div>;
+    return <div className="min-h-screen flex justify-center items-center"><Loader2 className="w-12 h-12 text-brand animate-spin" /></div>;
   }
 
   if (!splitData) return null;
@@ -59,7 +76,6 @@ export default function SplitDashboard() {
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6">
       <div className="max-w-3xl mx-auto">
         
-        {/* Header */}
         <div className="text-center mb-10 animate-fade-in">
           <div className="bg-brand/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
             <Users size={32} className="text-brand" />
@@ -68,7 +84,6 @@ export default function SplitDashboard() {
           <p className="text-lg text-gray-600">Booking for: <span className="font-bold text-brand">{splitData.propertyTitle}</span></p>
         </div>
 
-        {/* Progress Card */}
         <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 mb-8 animate-fade-in">
           <div className="flex justify-between items-end mb-4">
             <div>
@@ -96,7 +111,6 @@ export default function SplitDashboard() {
           )}
         </div>
 
-        {/* Slices */}
         <h3 className="text-xl font-bold text-gray-900 mb-4 px-2">Payment Links</h3>
         <div className="space-y-4">
           {splitData.shares.map((share, index) => (
@@ -112,8 +126,11 @@ export default function SplitDashboard() {
               </div>
 
               <div className="flex items-center gap-3">
+                {/* --- NEW: BUTTON LOGIC CHANGES HERE --- */}
                 {share.status === 'Paid' ? (
-                  <span className="bg-green-50 text-green-700 px-4 py-2 rounded-lg font-bold text-sm border border-green-200">Payment Complete</span>
+                  <button disabled className="bg-green-50 text-green-700 px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 border border-green-200 cursor-not-allowed">
+                    <CheckCircle size={18} /> Paid
+                  </button>
                 ) : (
                   <>
                     <button onClick={() => copyLink(share.id)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors">
@@ -124,7 +141,8 @@ export default function SplitDashboard() {
                       disabled={payingShareId === share.id}
                       className="bg-brand hover:bg-gray-900 text-white px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors disabled:opacity-70"
                     >
-                      {payingShareId === share.id ? 'Loading...' : 'Pay Share'} <ArrowRight size={16}/>
+                      {payingShareId === share.id ? <Loader2 size={16} className="animate-spin" /> : 'Pay Share'} 
+                      {payingShareId !== share.id && <ArrowRight size={16}/>}
                     </button>
                   </>
                 )}
