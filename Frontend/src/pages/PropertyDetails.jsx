@@ -190,16 +190,19 @@ export default function PropertyDetails() {
           </div>
 
           {/* RIGHT COLUMN: Booking Widget */}
-          <div className="relative">
+          <div className="relative z-10">
             <div className="sticky top-24 bg-white border border-gray-200 rounded-2xl p-6 shadow-xl">
               <div className="mb-6">
                 <span className="text-2xl font-black text-gray-900">₦{property.pricePerNight.toLocaleString()}</span>
                 <span className="text-gray-500 font-medium"> / night</span>
               </div>
 
-              <div className="border border-gray-300 rounded-xl overflow-hidden mb-4">
+              {/* FIX: Removed 'overflow-hidden' from this wrapper so the calendar can pop out! */}
+              <div className="border border-gray-300 rounded-xl mb-4">
                 <div className="flex border-b border-gray-300">
-                  <div className="w-1/2 p-3 border-r border-gray-300 relative cursor-pointer hover:bg-gray-50 transition-colors">
+                  
+                  {/* FIX: Added 'rounded-tl-xl' to keep the top-left corner smooth */}
+                  <div className="w-1/2 p-3 border-r border-gray-300 relative cursor-pointer hover:bg-gray-50 transition-colors rounded-tl-xl">
                     <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1 cursor-pointer">Check-in</label>
                     <DatePicker
                       selected={checkIn}
@@ -210,7 +213,9 @@ export default function PropertyDetails() {
                       className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer font-bold placeholder-gray-400"
                     />
                   </div>
-                  <div className={`w-1/2 p-3 relative transition-colors ${!checkIn ? 'opacity-50 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'}`}>
+
+                  {/* FIX: Added 'rounded-tr-xl' to keep the top-right corner smooth */}
+                  <div className={`w-1/2 p-3 relative transition-colors ${!checkIn ? 'opacity-50 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'} rounded-tr-xl`}>
                     <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1 cursor-pointer">Checkout</label>
                     <DatePicker
                       selected={checkOut} onChange={(date) => setCheckOut(date)}
