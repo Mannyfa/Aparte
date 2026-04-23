@@ -21,6 +21,8 @@ namespace Shortlet.Infrastructure.Data
         public DbSet<PropertyCalendar> PropertyCalendars { get; set; }
         public DbSet<PropertyAddOn> PropertyAddOns { get; set; }
         public DbSet<BookingAddOn> BookingAddOns { get; set; }
+        public DbSet<SplitGroup> SplitGroups { get; set; }
+        public DbSet<SplitShare> SplitShares { get; set; }
 
 
 
