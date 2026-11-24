@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Shortlet.Core.Entities;
+using Shortlet.Api.Helpers;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
@@ -15,7 +16,7 @@ namespace Shortlet.Api.Controllers
     {
         public Guid PropertyId { get; set; }
         public int Rating { get; set; }
-        public string Comment { get; set; }
+        public string? Comment { get; set; }
     }
 
     [ApiController]
@@ -36,7 +37,7 @@ namespace Shortlet.Api.Controllers
         {
             try
             {
-                var hostId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+                var hostId = (User.GetUserId() ?? throw new UnauthorizedAccessException());
 
                 var reviews = await _context.Reviews
                     .Include(r => r.Property)
@@ -74,13 +75,21 @@ namespace Shortlet.Api.Controllers
         {
             try
             {
-                var guestId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+                var guestId = (User.GetUserId() ?? throw new UnauthorizedAccessException());
 
-                // Security Check: Did this guest actually book this property?
-                var hasStayed = await _context.Bookings.AnyAsync(b => 
-                    b.PropertyId == request.PropertyId && 
-                    b.GuestId == guestId && 
-                    b.Status == "confirmed"); 
+                if (request.Rating < 1 || request.Rating > 5)
+                    return BadRequest(new { message = "Rating must be between 1 and 5." });
+                request.Comment = request.Comment?.Trim() ?? string.Empty;
+                if (request.Comment.Length > 2000)
+                    return BadRequest(new { message = "Reviews are limited to 2000 characters." });
+
+                // Security Check: Did this guest actually stay (confirmed booking that has started)?
+                var now = DateTime.UtcNow;
+                var hasStayed = await _context.Bookings.AnyAsync(b =>
+                    b.PropertyId == request.PropertyId &&
+                    b.GuestId == guestId &&
+                    (b.Status == "confirmed" || b.Status == "completed") &&
+                    b.CheckIn <= now);
 
                 if (!hasStayed)
                     return BadRequest(new { message = "You can only review properties you have booked." });

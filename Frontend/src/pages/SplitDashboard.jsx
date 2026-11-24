@@ -1,8 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Users, Copy, CheckCircle, Clock, ShieldCheck, ArrowRight, Loader2 } from 'lucide-react';
+import { Users, Copy, Check, Clock, Lock, ArrowRight, MessageCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../utils/api';
+import api, { errorMessage } from '../utils/api';
+import { Loader, Modal } from '../components/ui';
+import { naira, formatDay } from '../utils/format';
+
+function timeLeft(expiresAt) {
+  const ms = new Date(expiresAt) - Date.now();
+  if (ms <= 0) return 'expired';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return h > 0 ? `${h}h ${m}m left` : `${m}m left`;
+}
 
 export default function SplitDashboard() {
   const { id } = useParams();
@@ -11,13 +21,13 @@ export default function SplitDashboard() {
   const [splitData, setSplitData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [payingShareId, setPayingShareId] = useState(null);
+  const [emailFor, setEmailFor] = useState(null); // share id waiting for an email
+  const [email, setEmail] = useState('');
 
-  // Catch the return from Paystack
+  // Coming back from Paystack
   useEffect(() => {
-    const reference = searchParams.get('reference');
-    const trxref = searchParams.get('trxref');
-    if (reference || trxref) {
-      toast.success("Payment processing! Verifying with Escrow...", { id: 'payment-success' });
+    if (searchParams.get('reference') || searchParams.get('trxref')) {
+      toast.success('Payment received. Updating the group…', { id: 'payment-success' });
       searchParams.delete('reference');
       searchParams.delete('trxref');
       setSearchParams(searchParams, { replace: true });
@@ -25,137 +35,177 @@ export default function SplitDashboard() {
   }, [searchParams, setSearchParams]);
 
   useEffect(() => {
+    let interval = null;
+    let firstLoad = true;
+
     const fetchSplit = async () => {
       try {
         const res = await api.get(`/Bookings/split/${id}`);
         setSplitData(res.data);
+        // Nothing more will change once the group is finished: stop polling.
+        if (res.data.status !== 'Pending' && interval) {
+          clearInterval(interval);
+          interval = null;
+        }
       } catch (error) {
-        toast.error("Could not load split group.");
-        navigate('/');
+        if (firstLoad) {
+          // Only give up on the first load; a hiccup while polling shouldn't kick the user out or spam toasts.
+          if (interval) clearInterval(interval);
+          interval = null;
+          toast.error(errorMessage(error, 'Could not load this split group.'), { id: 'split-load' });
+          navigate('/');
+        }
       } finally {
+        firstLoad = false;
         setLoading(false);
       }
     };
 
-    fetchSplit(); // Initial load
-    
-    // THE MAGIC: Auto-refresh the dashboard every 5 seconds
-    const interval = setInterval(fetchSplit, 5000); 
-    return () => clearInterval(interval);
+    fetchSplit();
+    interval = setInterval(fetchSplit, 5000); // auto-refresh while friends are paying
+    return () => { if (interval) clearInterval(interval); };
   }, [id, navigate]);
 
-  const copyLink = (shareId) => {
-    const url = `${window.location.origin}/split-success/${id}`;
-    navigator.clipboard.writeText(`Hey! Here is the link to pay your share for our Apartey booking: ${url}`);
-    toast.success("Link copied! Send it via WhatsApp.");
+  const shareUrl = `${window.location.origin}/split-success/${id}`;
+  const shareText = `Here’s the link to pay your share of our Apartey booking: ${shareUrl}`;
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(shareText);
+      toast.success('Link copied');
+    } catch {
+      toast.error('Couldn’t copy. Long-press the link to copy it instead.');
+    }
   };
 
-  const handlePayShare = async (shareId) => {
-    const email = prompt("Enter your email address for the receipt:");
-    if (!email) return;
+  const startPayment = async (e) => {
+    e.preventDefault();
+    const value = email.trim();
+    if (!/^\S+@\S+\.\S+$/.test(value)) return toast.error('Please enter a valid email address.');
 
+    const shareId = emailFor;
+    setEmailFor(null);
     setPayingShareId(shareId);
     try {
-      const res = await api.post(`/Bookings/split/${shareId}/pay`, { email });
-      window.location.href = res.data.paymentUrl; 
+      const res = await api.post(`/Bookings/split/${shareId}/pay`, { email: value });
+      window.location.href = res.data.paymentUrl;
     } catch (error) {
-      toast.error(error.response?.data || "Failed to initiate payment.");
+      toast.error(errorMessage(error, 'Failed to start the payment.'));
       setPayingShareId(null);
     }
   };
 
-  if (loading) {
-    return <div className="min-h-screen flex justify-center items-center"><Loader2 className="w-12 h-12 text-brand animate-spin" /></div>;
-  }
-
+  if (loading) return <Loader label="Loading group" />;
   if (!splitData) return null;
 
+  const { status } = splitData;
+  const isOpen = status === 'Pending';
   const progressPct = (splitData.paidShares / splitData.totalShares) * 100;
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6">
-      <div className="max-w-3xl mx-auto">
-        
-        <div className="text-center mb-10 animate-fade-in">
-          <div className="bg-brand/10 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Users size={32} className="text-brand" />
+    <div className="page max-w-3xl pb-24 pt-10">
+      <p className="eyebrow mb-4">Apartey Split</p>
+      <h1 className="h-page">{splitData.propertyTitle}</h1>
+      <p className="lead mt-3">
+        {formatDay(splitData.checkIn)} → {formatDay(splitData.checkOut)} · split {splitData.totalShares} ways
+      </p>
+
+      {/* Progress */}
+      <div className="card mt-10 p-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Paid</p>
+            <p className="mt-1 text-3xl font-light tracking-[-0.03em]">
+              {splitData.paidShares} <span className="text-faint">of {splitData.totalShares}</span>
+            </p>
           </div>
-          <h1 className="text-3xl md:text-4xl font-black text-gray-900 mb-2">Apartey Split Group</h1>
-          <p className="text-lg text-gray-600">Booking for: <span className="font-bold text-brand">{splitData.propertyTitle}</span></p>
+          <div className="text-right">
+            <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-faint">Booking total</p>
+            <p className="mono mt-1 text-xl">{naira(splitData.totalAmount)}</p>
+          </div>
         </div>
-
-        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-8 mb-8 animate-fade-in">
-          <div className="flex justify-between items-end mb-4">
-            <div>
-              <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Group Progress</p>
-              <p className="text-2xl font-black text-gray-900">{splitData.paidShares} of {splitData.totalShares} Paid</p>
-            </div>
-            <div className="text-right">
-              <p className="text-sm font-bold text-gray-400 uppercase tracking-wider mb-1">Total Booking</p>
-              <p className="text-2xl font-black text-brand">₦{splitData.totalAmount.toLocaleString()}</p>
-            </div>
-          </div>
-          
-          <div className="w-full bg-gray-100 rounded-full h-4 mb-4 overflow-hidden">
-            <div className="bg-brand h-4 rounded-full transition-all duration-1000" style={{ width: `${progressPct}%` }}></div>
-          </div>
-
-          {splitData.status === "Completed" ? (
-            <div className="bg-green-50 text-green-700 p-4 rounded-xl flex items-center gap-3 font-bold border border-green-200">
-              <CheckCircle size={24} /> Group fully funded! Booking is confirmed.
-            </div>
+        <div className="mt-5 h-2 overflow-hidden rounded-full bg-sand">
+          <div className="h-full rounded-full bg-lime transition-all duration-700" style={{ width: `${progressPct}%` }} />
+        </div>
+        <div className="mt-5 text-sm">
+          {status === 'Completed' ? (
+            <p className="flex items-center gap-2"><span className="grid h-5 w-5 place-items-center rounded bg-lime"><Check size={12} /></span> Fully paid. The host will confirm the booking shortly.</p>
+          ) : isOpen ? (
+            <p className="flex items-center gap-2 text-muted"><Clock size={15} /> Waiting for the remaining shares · <span className="mono text-ink">{timeLeft(splitData.expiresAt)}</span></p>
           ) : (
-            <div className="bg-yellow-50 text-yellow-700 p-4 rounded-xl flex items-center gap-3 font-bold border border-yellow-200 text-sm">
-              <Clock size={20} /> Waiting on remaining payments to confirm this booking.
-            </div>
+            <p className="flex items-center gap-2 text-red-700"><X size={15} /> This group {status === 'Expired' ? 'expired before everyone paid' : 'was cancelled'}. The host can decline the booking to refund anyone who paid.</p>
           )}
         </div>
-
-        <h3 className="text-xl font-bold text-gray-900 mb-4 px-2">Payment Links</h3>
-        <div className="space-y-4">
-          {splitData.shares.map((share, index) => (
-            <div key={share.id} className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all hover:shadow-md">
-              <div className="flex items-center gap-4">
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg ${share.status === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
-                  {share.status === 'Paid' ? <CheckCircle size={20}/> : `#${index + 1}`}
-                </div>
-                <div>
-                  <p className="font-bold text-gray-900 text-lg">Share {index + 1}</p>
-                  <p className="text-gray-500 font-medium">₦{share.amount.toLocaleString()}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                {/* --- NEW: BUTTON LOGIC CHANGES HERE --- */}
-                {share.status === 'Paid' ? (
-                  <button disabled className="bg-green-50 text-green-700 px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 border border-green-200 cursor-not-allowed">
-                    <CheckCircle size={18} /> Paid
-                  </button>
-                ) : (
-                  <>
-                    <button onClick={() => copyLink(share.id)} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors">
-                      <Copy size={16}/> Copy Link
-                    </button>
-                    <button 
-                      onClick={() => handlePayShare(share.id)}
-                      disabled={payingShareId === share.id}
-                      className="bg-brand hover:bg-gray-900 text-white px-6 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors disabled:opacity-70"
-                    >
-                      {payingShareId === share.id ? <Loader2 size={16} className="animate-spin" /> : 'Pay Share'} 
-                      {payingShareId !== share.id && <ArrowRight size={16}/>}
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <p className="text-center text-xs text-gray-400 mt-12 font-medium flex items-center justify-center gap-1">
-          <ShieldCheck size={14}/> Funds held securely in Apartey Escrow until the group is complete.
-        </p>
-
       </div>
+
+      {/* Share */}
+      {isOpen && (
+        <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-lime p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium">Invite your friends</p>
+            <p className="text-xs text-ink/70">Everyone opens the same link and picks an unpaid share.</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={copyLink} className="btn-ink btn-sm"><Copy size={14} /> Copy link</button>
+            <a href={`https://wa.me/?text=${encodeURIComponent(shareText)}`} target="_blank" rel="noreferrer" className="btn btn-sm border border-ink/20 hover:bg-ink/5">
+              <MessageCircle size={14} /> WhatsApp
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* Shares */}
+      <p className="eyebrow mb-4 mt-12">Shares</p>
+      <ul className="card divide-y divide-line">
+        {splitData.shares.map((share, index) => {
+          const paid = share.status === 'Paid';
+          return (
+            <li key={share.id} className="flex items-center justify-between gap-4 p-4 sm:p-5">
+              <div className="flex items-center gap-3">
+                <span className={`grid h-9 w-9 place-items-center rounded-lg font-mono text-xs ${paid ? 'bg-lime' : 'bg-sand text-muted'}`}>
+                  {paid ? <Check size={15} /> : `#${index + 1}`}
+                </span>
+                <div>
+                  <p className="text-sm font-medium">Share {index + 1}</p>
+                  <p className="mono text-xs text-muted">{naira(share.amount, { decimals: 2 })}</p>
+                </div>
+              </div>
+              {paid ? (
+                <span className="chip-green">Paid</span>
+              ) : isOpen ? (
+                <button
+                  onClick={() => { setEmail(''); setEmailFor(share.id); }}
+                  disabled={payingShareId === share.id}
+                  className="btn-ink btn-sm"
+                >
+                  {payingShareId === share.id ? 'Opening…' : <>Pay this share <ArrowRight size={14} /></>}
+                </button>
+              ) : (
+                <span className="chip-neutral">Unpaid</span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+
+      <p className="mt-8 flex items-center justify-center gap-1.5 text-xs text-faint">
+        <Lock size={12} /> Payments are processed securely by Paystack
+      </p>
+
+      <Modal open={!!emailFor} onClose={() => setEmailFor(null)} title="Your email">
+        <form onSubmit={startPayment} className="p-6">
+          <div className="mb-5 flex items-center justify-between">
+            <h3 className="text-lg font-light tracking-[-0.02em]">Where should we send your receipt?</h3>
+            <button type="button" onClick={() => setEmailFor(null)} className="btn-ghost btn-sm -mr-2" aria-label="Close"><X size={16} /></button>
+          </div>
+          <label htmlFor="split-email" className="label">Email</label>
+          <input id="split-email" type="email" required autoFocus className="input" placeholder="you@example.com"
+            value={email} onChange={(e) => setEmail(e.target.value)} />
+          <button type="submit" className="btn-lime btn-lg mt-5 w-full">
+            <Users size={16} /> Continue to payment
+          </button>
+        </form>
+      </Modal>
     </div>
   );
 }

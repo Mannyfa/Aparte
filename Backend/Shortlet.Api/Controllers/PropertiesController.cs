@@ -1,45 +1,36 @@
 // Backend/Shortlet.Api/Controllers/PropertiesController.cs
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Security.Claims;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Shortlet.Api.Helpers;
 using Shortlet.Core.Entities;
 using Shortlet.Infrastructure.Data;
-using System.Text.Json;
 
 namespace Shortlet.Api.Controllers
 {
-    // DTO defined here for simplicity so you don't have to hunt for it!
     public class CreatePropertyFormData
     {
-        public string Title { get; set; }
-        public string Description { get; set; }
-        public string Type { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Type { get; set; } = string.Empty;
         public decimal PricePerNight { get; set; }
-        public string City { get; set; }
-        public string State { get; set; }
-        public string Area { get; set; }
+        public decimal CautionFee { get; set; }
+        public string City { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+        public string Area { get; set; } = string.Empty;
         public List<IFormFile>? Images { get; set; }
-        public string? Amenities { get; set; } // Sent as comma-separated from React
-        public string? HouseRules { get; set; } // Sent as comma-separated from React
-        
-        // NEW: Accepts a JSON string of AddOns from React
-        public string? AddOnsJson { get; set; } 
+        public string? Amenities { get; set; }   // comma-separated from React
+        public string? HouseRules { get; set; }  // comma-separated from React
+        public string? AddOnsJson { get; set; }  // JSON array of { name, description, price }
     }
 
-    // Quick helper class for deserializing the AddOns from React
-    public class AddOnRequestDto 
+    public class AddOnRequestDto
     {
-        public string Name { get; set; }
-        public string Description { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
         public decimal Price { get; set; }
     }
 
@@ -47,211 +38,220 @@ namespace Shortlet.Api.Controllers
     [Route("api/[controller]")]
     public class PropertiesController : ControllerBase
     {
-        private readonly AppDbContext _context;
-        private readonly Cloudinary _cloudinary;
+        private const int MaxImages = 5;
+        private const long MaxImageBytes = 10 * 1024 * 1024;
 
-        public PropertiesController(AppDbContext context, IConfiguration config)
+        private readonly AppDbContext _context;
+        private readonly Lazy<Cloudinary> _cloudinary;
+        private readonly ILogger<PropertiesController> _logger;
+
+        public PropertiesController(AppDbContext context, Lazy<Cloudinary> cloudinary, ILogger<PropertiesController> logger)
         {
             _context = context;
-            
-            // 1. Try to read from appsettings.json
-            var cloudName = config["CloudinarySettings:CloudName"];
-            var apiKey = config["CloudinarySettings:ApiKey"];
-            var apiSecret = config["CloudinarySettings:ApiSecret"];
-
-            // 2. If .NET fails to read the file (returns null), use these hardcoded keys instead!
-            if (string.IsNullOrEmpty(cloudName))
-            {
-                cloudName = "dr79cponz"; 
-                apiKey = "371983351852516";       
-                apiSecret = "eib4KCH5JjMHtSDb3vv_8ldg-Mo";
-            }
-
-            var account = new Account(cloudName, apiKey, apiSecret);
-            _cloudinary = new Cloudinary(account);
+            _cloudinary = cloudinary;
+            _logger = logger;
         }
+
+        /// <summary>Listings visible to the public (everything except suspended ones).</summary>
+        private IQueryable<Property> PublicProperties() => _context.Properties.Where(p => p.Status != "suspended");
+
+        private static List<string> SplitList(string? csv) =>
+            string.IsNullOrWhiteSpace(csv)
+                ? new List<string>()
+                : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct().ToList();
 
         [HttpPost]
         [Authorize]
         [Consumes("multipart/form-data")]
         public async Task<IActionResult> CreateProperty([FromForm] CreatePropertyFormData request)
         {
-            try
+            var hostId = User.GetUserId();
+            if (hostId == null) return Unauthorized();
+            if (!User.HasRole("host")) return StatusCode(403, new { message = "Only host accounts can list properties." });
+
+            if (string.IsNullOrWhiteSpace(request.Title)) return BadRequest(new { message = "Title is required." });
+            if (string.IsNullOrWhiteSpace(request.City)) return BadRequest(new { message = "City is required." });
+            if (request.PricePerNight <= 0) return BadRequest(new { message = "Price per night must be greater than zero." });
+            if (request.CautionFee < 0) return BadRequest(new { message = "Caution fee can't be negative." });
+
+            // --- ADD-ONS ---
+            var parsedAddOns = new List<PropertyAddOn>();
+            if (!string.IsNullOrWhiteSpace(request.AddOnsJson))
             {
-                var hostId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
-
-                var imageUrls = new List<string>();
-
-                // --- CLOUDINARY MULTI-UPLOAD MAGIC ---
-                if (request.Images != null && request.Images.Count > 0)
+                try
                 {
-                    // Limit to 5 images max
-                    foreach (var image in request.Images.Take(5))
+                    var options = new JsonSerializerOptions
                     {
-                        using var stream = image.OpenReadStream();
-                        var uploadParams = new ImageUploadParams
-                        {
-                            File = new FileDescription(image.FileName, stream),
-                            Folder = "apartey_properties"
-                        };
-                        var result = await _cloudinary.UploadAsync(uploadParams);
-                        if (result.Error == null) imageUrls.Add(result.SecureUrl.ToString());
-                    }
-                }
-
-                // --- PARSE THE ADD-ONS ---
-                var parsedAddOns = new List<PropertyAddOn>();
-                if (!string.IsNullOrEmpty(request.AddOnsJson))
-                {
-                    // FIX: Tell C# to allow numbers to be wrapped in quotes!
-                    var jsonOptions = new JsonSerializerOptions 
-                    { 
                         PropertyNameCaseInsensitive = true,
                         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
                     };
+                    var addOnList = JsonSerializer.Deserialize<List<AddOnRequestDto>>(request.AddOnsJson, options) ?? new();
+                    parsedAddOns = addOnList
+                        .Where(a => !string.IsNullOrWhiteSpace(a.Name) && a.Price >= 0)
+                        .Select(a => new PropertyAddOn { Name = a.Name.Trim(), Description = a.Description?.Trim() ?? "", Price = a.Price })
+                        .ToList();
+                }
+                catch (JsonException)
+                {
+                    return BadRequest(new { message = "Add-ons are not in a valid format." });
+                }
+            }
 
-                    var addOnList = JsonSerializer.Deserialize<List<AddOnRequestDto>>(request.AddOnsJson, jsonOptions);
-                    if (addOnList != null)
-                    {
-                        foreach (var a in addOnList)
-                        {
-                            parsedAddOns.Add(new PropertyAddOn { Name = a.Name, Description = a.Description, Price = a.Price });
-                        }
-                    }
+            // --- IMAGES (Cloudinary) ---
+            var imageUrls = new List<string>();
+            var images = (request.Images ?? new List<IFormFile>())
+                .Where(i => i.Length > 0)
+                .Take(MaxImages)
+                .ToList();
+
+            if (images.Any(i => i.Length > MaxImageBytes || !(i.ContentType?.StartsWith("image/") ?? false)))
+                return BadRequest(new { message = "Images must be image files under 10 MB." });
+
+            if (images.Count > 0)
+            {
+                Cloudinary cloudinary;
+                try { cloudinary = _cloudinary.Value; }
+                catch (InvalidOperationException ex)
+                {
+                    _logger.LogError(ex, "Cloudinary not configured");
+                    return StatusCode(500, new { message = "Image uploads are not configured on the server." });
                 }
 
-                var property = new Property
+                foreach (var image in images)
                 {
-                    HostId = hostId,
-                    Title = request.Title,
-                    Description = request.Description,
-                    Type = request.Type,
-                    PricePerNight = request.PricePerNight,
-                    City = request.City,
-                    State = request.State,
-                    Area = request.Area,
-                    ImageUrls = imageUrls,
-                    
-                    CautionFee = string.IsNullOrEmpty(Request.Form["cautionFee"]) ? 0 : decimal.Parse(Request.Form["cautionFee"]),
-
-                    // Convert comma-separated strings back into real Lists!
-                    Amenities = string.IsNullOrEmpty(request.Amenities) ? new List<string>() : request.Amenities.Split(',').ToList(),
-                    HouseRules = string.IsNullOrEmpty(request.HouseRules) ? new List<string>() : request.HouseRules.Split(',').ToList(),
-                    AddOns = parsedAddOns // Attach the AddOns!
-                };
-
-                _context.Properties.Add(property);
-                await _context.SaveChangesAsync();
-
-                return Ok(property);
+                    await using var stream = image.OpenReadStream();
+                    var result = await cloudinary.UploadAsync(new ImageUploadParams
+                    {
+                        File = new FileDescription(image.FileName, stream),
+                        Folder = "apartey_properties"
+                    });
+                    if (result.Error != null)
+                    {
+                        _logger.LogWarning("Cloudinary upload failed: {Error}", result.Error.Message);
+                        return BadRequest(new { message = $"Image upload failed: {result.Error.Message}" });
+                    }
+                    imageUrls.Add(result.SecureUrl.ToString());
+                }
             }
-            catch (Exception ex)
+
+            var property = new Property
             {
-                return BadRequest(new { message = ex.Message });
-            }
+                HostId = hostId.Value,
+                Title = request.Title.Trim(),
+                Description = request.Description?.Trim() ?? "",
+                Type = request.Type?.Trim() ?? "",
+                PricePerNight = request.PricePerNight,
+                CautionFee = request.CautionFee,
+                City = request.City.Trim(),
+                State = request.State?.Trim() ?? "",
+                Area = request.Area?.Trim() ?? "",
+                ImageUrls = imageUrls,
+                Amenities = SplitList(request.Amenities),
+                HouseRules = SplitList(request.HouseRules),
+                AddOns = parsedAddOns,
+                Status = "active" // there is no admin listing-approval flow yet; suspend via the Status column
+            };
+
+            _context.Properties.Add(property);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { property.Id, property.Title, property.Status, property.ImageUrls });
         }
+
+        private static IQueryable<object> Project(IQueryable<Property> query) => query.Select(p => new
+        {
+            p.Id, p.Title, p.Description, p.Type, p.PricePerNight,
+            p.CautionFee,
+            p.City, p.State, p.Area,
+            p.ImageUrls,
+            p.Amenities,
+            p.HouseRules,
+            AddOns = p.AddOns.Select(a => new { a.Id, a.Name, a.Description, a.Price }),
+            HostName = p.Host != null ? p.Host.Name : "Unknown Host",
+            HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
+        });
 
         [HttpGet]
         [AllowAnonymous]
         public async Task<IActionResult> GetProperties()
         {
-            var properties = await _context.Properties.Include(p => p.Host).Include(p => p.AddOns).OrderByDescending(p => p.Id).Select(p => new {
-                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, 
-                p.CautionFee, // <-- REVEALING ESCROW FEE TO FRONTEND!
-                p.City, p.State, p.Area,
-                ImageUrls = p.ImageUrls,
-                Amenities = p.Amenities,
-                HouseRules = p.HouseRules,
-                AddOns = p.AddOns,
-                HostName = p.Host != null ? p.Host.Name : "Unknown Host",
-                HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
-            }).ToListAsync();
+            var properties = await Project(PublicProperties().OrderByDescending(p => p.CreatedAt)).ToListAsync();
             return Ok(properties);
         }
 
-        [HttpGet("{id}")]
+        [HttpGet("{id:guid}")]
         [AllowAnonymous]
         public async Task<IActionResult> GetProperty(Guid id)
         {
-            var property = await _context.Properties
-                .Include(p => p.Host)
-                .Include(p => p.AddOns) // Load the AddOns from the DB
-                .Select(p => new {
-                    p.Id, p.Title, p.Description, p.Type, p.PricePerNight, 
-                    p.CautionFee, // <-- REVEALING ESCROW FEE TO FRONTEND!
-                    p.City, p.State, p.Area,
-                    ImageUrls = p.ImageUrls,
-                    Amenities = p.Amenities,
-                    HouseRules = p.HouseRules,
-                    AddOns = p.AddOns, // Send them to React
-                    HostName = p.Host != null ? p.Host.Name : "Unknown Host",
-                    HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
-                }).FirstOrDefaultAsync(p => p.Id == id);
-
-            if (property == null) return NotFound();
+            var property = await Project(PublicProperties().Where(p => p.Id == id)).FirstOrDefaultAsync();
+            if (property == null) return NotFound(new { message = "Property not found." });
             return Ok(property);
         }
 
         [HttpGet("search")]
         [AllowAnonymous]
-        public async Task<IActionResult> SearchProperties([FromQuery] string? searchTerm, [FromQuery] string? type, [FromQuery] decimal? minPrice, [FromQuery] decimal? maxPrice, [FromQuery] int page = 1, [FromQuery] int pageSize = 6) 
+        public async Task<IActionResult> SearchProperties(
+            [FromQuery] string? searchTerm, [FromQuery] string? type,
+            [FromQuery] decimal? minPrice, [FromQuery] decimal? maxPrice,
+            [FromQuery] int page = 1, [FromQuery] int pageSize = 6)
         {
-            var query = _context.Properties.AsQueryable();
-            if (!string.IsNullOrWhiteSpace(searchTerm)) query = query.Where(p => p.Title.ToLower().Contains(searchTerm.ToLower()) || p.City.ToLower().Contains(searchTerm.ToLower()) || p.Area.ToLower().Contains(searchTerm.ToLower()));
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 50);
+
+            var query = PublicProperties();
+            if (!string.IsNullOrWhiteSpace(searchTerm))
+            {
+                var pattern = "%" + searchTerm.Trim().Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_") + "%";
+                query = query.Where(p => EF.Functions.ILike(p.Title, pattern) || EF.Functions.ILike(p.City, pattern) || EF.Functions.ILike(p.Area, pattern));
+            }
             if (!string.IsNullOrWhiteSpace(type)) query = query.Where(p => p.Type == type);
             if (minPrice.HasValue) query = query.Where(p => p.PricePerNight >= minPrice.Value);
             if (maxPrice.HasValue) query = query.Where(p => p.PricePerNight <= maxPrice.Value);
 
             var totalItems = await query.CountAsync();
-            var properties = await query.Include(p => p.Host).Include(p => p.AddOns).OrderByDescending(p => p.Id).Skip((page - 1) * pageSize).Take(pageSize).Select(p => new {
-                p.Id, p.Title, p.Description, p.Type, p.PricePerNight, 
-                p.CautionFee, // <-- REVEALING ESCROW FEE TO FRONTEND!
-                p.City, p.State, p.Area,
-                ImageUrls = p.ImageUrls,
-                Amenities = p.Amenities,
-                HouseRules = p.HouseRules,
-                AddOns = p.AddOns,
-                HostName = p.Host != null ? p.Host.Name : "Unknown Host",
-                HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
-            }).ToListAsync();
+            var properties = await Project(query.OrderByDescending(p => p.CreatedAt).ThenBy(p => p.Id)
+                    .Skip((page - 1) * pageSize).Take(pageSize))
+                .ToListAsync();
 
-            return Ok(new { Data = properties, CurrentPage = page, TotalPages = (int)Math.Ceiling(totalItems / (double)pageSize), TotalItems = totalItems });
+            return Ok(new
+            {
+                Data = properties,
+                CurrentPage = page,
+                TotalPages = (int)Math.Ceiling(totalItems / (double)pageSize),
+                TotalItems = totalItems
+            });
         }
 
         [HttpGet("host")]
         [Authorize]
         public async Task<IActionResult> GetHostProperties()
         {
-            var hostId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
-            // Including AddOns here too just in case the Host Dashboard needs to display them later!
-            var properties = await _context.Properties.Include(p => p.AddOns).Where(p => p.HostId == hostId).OrderByDescending(p => p.Id).ToListAsync();
+            var hostId = User.GetUserId();
+            if (hostId == null) return Unauthorized();
+
+            var properties = await Project(_context.Properties.Where(p => p.HostId == hostId.Value).OrderByDescending(p => p.CreatedAt))
+                .ToListAsync();
             return Ok(properties);
         }
 
-
-        [HttpGet("{id}/booked-dates")]
+        [HttpGet("{id:guid}/booked-dates")]
         [AllowAnonymous]
         public async Task<IActionResult> GetBookedDates(Guid id)
         {
-            // Fetch all bookings for this property that are either paid or pending (currently checking out)
+            var today = DateTime.UtcNow.Date;
             var bookings = await _context.Bookings
-                .Where(b => b.PropertyId == id && (b.Status == "paid" || b.Status == "confirmed" || b.Status == "pending"))
+                .Where(b => b.PropertyId == id && b.CheckOut > today)
+                .BlockingDates(_context, DateTime.UtcNow)
+                .Select(b => new { b.CheckIn, b.CheckOut })
                 .ToListAsync();
 
-            var bookedDates = new List<string>();
-
+            // Block check-in day up to (not including) check-out day: a new guest can arrive on someone's check-out day.
+            var bookedDates = new SortedSet<string>();
             foreach (var booking in bookings)
-            {
-                // Loop from CheckIn date up to (but not including) CheckOut date.
-                // We don't block the checkout day because a new guest can check in that afternoon!
                 for (var date = booking.CheckIn.Date; date < booking.CheckOut.Date; date = date.AddDays(1))
-                {
                     bookedDates.Add(date.ToString("yyyy-MM-dd"));
-                }
-            }
 
-            // Return unique dates to avoid duplicates
-            return Ok(bookedDates.Distinct());
+            return Ok(bookedDates);
         }
     }
 }

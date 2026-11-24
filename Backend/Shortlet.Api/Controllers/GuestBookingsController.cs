@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Shortlet.Api.Helpers;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
@@ -27,7 +28,7 @@ namespace Shortlet.Api.Controllers
         {
             try
             {
-                var guestId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+                var guestId = (User.GetUserId() ?? throw new UnauthorizedAccessException());
 
                 var trips = await _context.Bookings
                     .Include(b => b.Property)
@@ -41,7 +42,7 @@ namespace Shortlet.Api.Controllers
                         // FIX: Set to empty string so the build passes! 
                         // (If you know what your image property is called in Property.cs, 
                         // you can change this later to something like: b.Property.Image)
-                        PropertyImage = "", 
+                        PropertyImage = b.Property.ImageUrls.FirstOrDefault(), 
                         
                         PropertyCity = b.Property.City,
                         b.CheckIn,

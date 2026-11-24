@@ -15,8 +15,9 @@ namespace Shortlet.Infrastructure
 
             var configuration = new ConfigurationBuilder()
                 .SetBasePath(basePath)
-                .AddJsonFile("appsettings.json", optional: false)
+                .AddJsonFile("appsettings.json", optional: true)
                 .AddJsonFile("appsettings.Development.json", optional: true)
+                .AddEnvironmentVariables() // lets ConnectionStrings__DefaultConnection override the files
                 .Build();
 
             var connectionString = configuration.GetConnectionString("DefaultConnection");

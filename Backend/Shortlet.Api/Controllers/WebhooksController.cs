@@ -1,16 +1,12 @@
-using System;
-using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Shortlet.Core.Interfaces; 
-using Shortlet.Infrastructure.Data;
+using Shortlet.Api.Helpers;
 using Shortlet.Core.Entities;
-using System.Linq;
+using Shortlet.Core.Interfaces;
+using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
 {
@@ -19,184 +15,171 @@ namespace Shortlet.Api.Controllers
     public class WebhooksController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly string _secretKey;
-        private readonly IEmailService _emailService;
+        private readonly IConfiguration _config;
+        private readonly IEmailQueue _emailQueue;
+        private readonly ILogger<WebhooksController> _logger;
 
-        public WebhooksController(AppDbContext context, IConfiguration config, IEmailService emailService)
+        public WebhooksController(AppDbContext context, IConfiguration config, IEmailQueue emailQueue, ILogger<WebhooksController> logger)
         {
             _context = context;
-            _secretKey = config["PaystackSettings:SecretKey"] ?? config["Paystack:SecretKey"] ?? throw new Exception("Paystack key missing");
-            _emailService = emailService;
+            _config = config;
+            _emailQueue = emailQueue;
+            _logger = logger;
         }
 
         [HttpPost("paystack")]
         public async Task<IActionResult> PaystackWebhook()
         {
+            var secretKey = _config["Paystack:SecretKey"];
+            if (string.IsNullOrEmpty(secretKey))
+            {
+                _logger.LogError("Paystack webhook received but Paystack:SecretKey is not configured.");
+                return StatusCode(500);
+            }
+
+            using var reader = new StreamReader(Request.Body);
+            var body = await reader.ReadToEndAsync();
+
+            var signature = Request.Headers["x-paystack-signature"].ToString();
+            if (string.IsNullOrEmpty(signature)) return BadRequest("No signature found");
+            if (!SignatureMatches(body, secretKey, signature)) return Unauthorized("Invalid signature");
+
             try
             {
-                Console.WriteLine("🚨 PAYSTACK WEBHOOK INITIATED 🚨");
-                
-                using var reader = new StreamReader(Request.Body);
-                var body = await reader.ReadToEndAsync();
+                using var doc = JsonDocument.Parse(body);
+                var payload = doc.RootElement;
+                if (payload.GetProperty("event").GetString() != "charge.success") return Ok();
 
-                var paystackSignature = Request.Headers["x-paystack-signature"].ToString();
-                if (string.IsNullOrEmpty(paystackSignature)) return BadRequest("No signature found");
+                var data = payload.GetProperty("data");
+                var reference = data.GetProperty("reference").GetString() ?? string.Empty;
+                var amountPaidKobo = data.TryGetProperty("amount", out var amt) ? amt.GetInt64() : 0;
 
-                var expectedSignature = ComputeHmacSha512(body, _secretKey);
-                if (expectedSignature.ToLower() != paystackSignature.ToLower())
-                    return Unauthorized("Invalid signature");
+                await using var tx = await _context.Database.BeginTransactionAsync();
 
-                var payload = JsonDocument.Parse(body).RootElement;
-                var eventName = payload.GetProperty("event").GetString();
+                Booking? bookingToProcess = null;
 
-                if (eventName == "charge.success")
+                // ---------------- BRANCH 1: APARTEY SPLIT (fractional payment) ----------------
+                if (reference.StartsWith("SPLIT", StringComparison.Ordinal))
                 {
-                    var data = payload.GetProperty("data");
-                    var reference = data.GetProperty("reference").GetString(); 
-                    var guestEmail = data.GetProperty("customer").GetProperty("email").GetString();
-
-                    Booking bookingToProcess = null;
-
-                    // =================================================================
-                    // BRANCH 1: APARTEY SPLIT (FRACTIONAL PAYMENT)
-                    // =================================================================
-                    if (reference.StartsWith("SPLIT_"))
+                    SplitShare? share = null;
+                    if (BookingRules.TryParseSplitReference(reference, out var shareId))
                     {
-                        var shareIdStr = reference.Substring(6); // Strip the prefix
-                        if (Guid.TryParse(shareIdStr, out Guid shareId))
-                        {
-                            var share = await _context.SplitShares
-                                .Include(s => s.SplitGroup)
-                                .ThenInclude(sg => sg.Booking)
-                                .ThenInclude(b => b.Property)
-                                .FirstOrDefaultAsync(s => s.Id == shareId);
-
-                            if (share != null && share.Status == "Pending")
-                            {
-                                share.Status = "Paid";
-                                share.SplitGroup.PaidShares += 1;
-                                
-                                Console.WriteLine($"✅ Split Fraction Paid! ({share.SplitGroup.PaidShares}/{share.SplitGroup.TotalShares})");
-
-                                // IS THE GROUP FULLY FUNDED?
-                                if (share.SplitGroup.PaidShares == share.SplitGroup.TotalShares)
-                                {
-                                    Console.WriteLine("🎉 SPLIT GROUP COMPLETE! Unlocking Escrow & Booking...");
-                                    share.SplitGroup.Status = "Completed";
-                                    bookingToProcess = share.SplitGroup.Booking;
-                                    
-                                    // Send the confirmation email to the LEAD GUEST who originated the booking
-                                    var leadGuest = await _context.Users.FindAsync(bookingToProcess.GuestId);
-                                    if (leadGuest != null) guestEmail = leadGuest.Email; 
-                                }
-                                
-                                // Save the fractional progress even if it's not complete yet
-                                await _context.SaveChangesAsync(); 
-                            }
-                        }
+                        await WalletLedger.LockShareAsync(_context, shareId);
+                        share = await _context.SplitShares.Include(s => s.SplitGroup).FirstOrDefaultAsync(s => s.Id == shareId);
                     }
-                    // =================================================================
-                    // BRANCH 2: STANDARD SOLO BOOKING
-                    // =================================================================
-                    else if (Guid.TryParse(reference, out Guid bookingId))
+                    share ??= await _context.SplitShares.Include(s => s.SplitGroup).FirstOrDefaultAsync(s => s.PaymentReference == reference);
+
+                    if (share == null)
                     {
-                        bookingToProcess = await _context.Bookings
-                            .Include(b => b.Property)
-                            .FirstOrDefaultAsync(b => b.Id == bookingId); 
+                        _logger.LogWarning("Split payment {Reference} does not match any share.", reference);
                     }
-
-                    // =================================================================
-                    // THE ESCROW & PAYOUT ENGINE (Runs when 100% funded)
-                    // =================================================================
-                    if (bookingToProcess != null && (bookingToProcess.Status == "pending" || bookingToProcess.Status == "split_pending"))
+                    else if (share.Status != "Paid")
                     {
-                        Console.WriteLine($"✅ 100% Funded for Booking {bookingToProcess.Id}. Processing Escrow Math...");
-                        
-                        bookingToProcess.Status = "paid";
-
-                        // 1. Lock the Escrow Vault
-                        if (bookingToProcess.CautionFeeAmount > 0)
+                        if (amountPaidKobo < ToKobo(share.Amount))
                         {
-                            bookingToProcess.CautionFeeStatus = "Held";
-                            Console.WriteLine($"🔒 Escrow Locked: ₦{bookingToProcess.CautionFeeAmount:N0} for Caution Fee.");
+                            _logger.LogWarning("Split payment {Reference} underpaid: {Paid} kobo for {Expected}.", reference, amountPaidKobo, ToKobo(share.Amount));
+                            return Ok();
                         }
 
-                        // 2. Sum up the Add-Ons (Host keeps 100% of these)
-                        decimal addOnsTotal = await _context.BookingAddOns
-                            .Where(a => a.BookingId == bookingToProcess.Id)
-                            .SumAsync(a => a.Price);
+                        // Lock the booking first so two friends paying at the same time can't both miss "fully funded".
+                        await WalletLedger.LockBookingAsync(_context, share.SplitGroup.BookingId);
+                        await _context.Entry(share.SplitGroup).ReloadAsync();
 
-                        // 3. FLAWLESS SPLIT: Remove Escrow and Add-Ons to find the Room Rate + Fee
-                        decimal roomWithFee = bookingToProcess.TotalPrice - bookingToProcess.CautionFeeAmount - addOnsTotal;
-                        
-                        // 4. Extract the 5% Platform Fee from the room
-                        decimal roomRate = roomWithFee / 1.05m;
-                        decimal platformFee = roomWithFee - roomRate;
+                        share.Status = "Paid";
+                        share.PaymentReference = reference; // remember the reference that actually paid (for refunds)
+                        share.SplitGroup.PaidShares += 1;
+                        _logger.LogInformation("Split share paid ({Paid}/{Total}) for group {Group}.", share.SplitGroup.PaidShares, share.SplitGroup.TotalShares, share.SplitGroupId);
 
-                        // 5. Final Host Earnings (Room Rate + Add Ons)
-                        decimal hostEarnings = roomRate + addOnsTotal;
-
-                        // Find the Host's Wallet
-                        var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.HostId == bookingToProcess.Property.HostId);
-                        if (wallet == null)
+                        if (share.SplitGroup.PaidShares >= share.SplitGroup.TotalShares)
                         {
-                            wallet = new Wallet { HostId = bookingToProcess.Property.HostId, Balance = 0 };
-                            _context.Wallets.Add(wallet);
+                            share.SplitGroup.Status = "Completed";
+                            bookingToProcess = await _context.Bookings.Include(b => b.Property).Include(b => b.Guest)
+                                .FirstOrDefaultAsync(b => b.Id == share.SplitGroup.BookingId);
                         }
-
-                        // Credit the Host's Wallet
-                        wallet.Balance += hostEarnings;
-                        wallet.UpdatedAt = DateTime.UtcNow;
-
-                        // Generate an immutable receipt
-                        var transaction = new Transaction
-                        {
-                            WalletId = wallet.Id,
-                            Amount = hostEarnings,
-                            Type = "Credit",
-                            Description = $"Room Earnings & Add-Ons (Escrow Held: ₦{bookingToProcess.CautionFeeAmount})",
-                            Reference = bookingToProcess.Id.ToString()
-                        };
-                        _context.Transactions.Add(transaction);
-
                         await _context.SaveChangesAsync();
-                        Console.WriteLine($"💰 Wallet updated! Host earned: ₦{hostEarnings:N0}");
+                    }
+                }
+                // ---------------- BRANCH 2: STANDARD SOLO BOOKING ----------------
+                else if (Guid.TryParse(reference, out var bookingId))
+                {
+                    await WalletLedger.LockBookingAsync(_context, bookingId);
+                    bookingToProcess = await _context.Bookings.Include(b => b.Property).Include(b => b.Guest)
+                        .FirstOrDefaultAsync(b => b.Id == bookingId);
 
-                        // FIRE THE EMAIL!
-                        try 
-                        {
-                            await _emailService.SendBookingConfirmationAsync(
-                                guestEmail, 
-                                "Valued Guest", 
-                                bookingToProcess.Property.Title, 
-                                bookingToProcess.CheckInCode
-                            );
-                            Console.WriteLine("📧 Confirmation Email Sent to Lead Guest!");
-                        }
-                        catch (Exception emailEx)
-                        {
-                            Console.WriteLine($"⚠️ Database updated, but email failed: {emailEx.Message}");
-                        }
+                    if (bookingToProcess != null && amountPaidKobo < ToKobo(bookingToProcess.TotalPrice))
+                    {
+                        _logger.LogWarning("Booking {BookingId} underpaid: {Paid} kobo for {Expected}.", bookingId, amountPaidKobo, ToKobo(bookingToProcess.TotalPrice));
+                        return Ok();
                     }
                 }
 
-                return Ok(); // Always return 200 OK to Paystack
+                // ---------------- ESCROW & PAYOUT ENGINE (runs once, when 100% funded) ----------------
+                // "failed" is included: the guest may complete payment after our init call timed out.
+                if (bookingToProcess != null && bookingToProcess.Status is "pending" or "split_pending" or "failed")
+                {
+                    bookingToProcess.Status = "paid";
+                    if (bookingToProcess.CautionFeeAmount > 0) bookingToProcess.CautionFeeStatus = "Held";
+
+                    decimal addOnsTotal = await _context.BookingAddOns
+                        .Where(a => a.BookingId == bookingToProcess.Id)
+                        .SumAsync(a => a.Price);
+
+                    // Room + 5% fee = total − caution − add-ons. The host keeps the room rate and 100% of add-ons.
+                    decimal roomWithFee = bookingToProcess.TotalPrice - bookingToProcess.CautionFeeAmount - addOnsTotal;
+                    decimal roomRate = roomWithFee / (1 + BookingRules.PlatformFeeRate);
+                    decimal hostEarnings = Math.Round(roomRate + addOnsTotal, 2);
+
+                    var wallet = await WalletLedger.LockWalletAsync(_context, bookingToProcess.Property.HostId);
+                    wallet.Balance += hostEarnings;
+                    wallet.UpdatedAt = DateTime.UtcNow;
+
+                    _context.Transactions.Add(new Transaction
+                    {
+                        WalletId = wallet.Id,
+                        Amount = hostEarnings,
+                        Type = "Credit",
+                        Description = $"Room Earnings & Add-Ons (Escrow Held: ₦{bookingToProcess.CautionFeeAmount:N0})",
+                        Reference = bookingToProcess.Id.ToString()
+                    });
+
+                    await _context.SaveChangesAsync();
+                    await tx.CommitAsync();
+                    _logger.LogInformation("Booking {BookingId} paid. Host credited ₦{Amount:N2}.", bookingToProcess.Id, hostEarnings);
+
+                    await _emailQueue.QueueEmailAsync(new EmailMessagePayload
+                    {
+                        ToEmail = bookingToProcess.Guest.Email,
+                        Subject = $"Payment received: {bookingToProcess.Property.Title}",
+                        Body = $"<p>Hi {System.Net.WebUtility.HtmlEncode(bookingToProcess.Guest.Name)},</p>" +
+                               $"<p>We've received your payment for <strong>{System.Net.WebUtility.HtmlEncode(bookingToProcess.Property.Title)}</strong> " +
+                               $"({bookingToProcess.CheckIn:dd MMM yyyy} – {bookingToProcess.CheckOut:dd MMM yyyy}). " +
+                               "Your host will confirm shortly and you'll receive your check-in code by email.</p>"
+                    });
+                }
+                else
+                {
+                    await tx.CommitAsync();
+                }
+
+                return Ok();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ CRITICAL WEBHOOK ERROR: {ex.Message}");
-                return StatusCode(500, ex.Message);
+                _logger.LogError(ex, "Paystack webhook processing failed");
+                return StatusCode(500); // Paystack will retry
             }
         }
 
-        private static string ComputeHmacSha512(string text, string key)
-        {
-            byte[] keyBytes = Encoding.UTF8.GetBytes(key);
-            byte[] textBytes = Encoding.UTF8.GetBytes(text);
+        private static long ToKobo(decimal naira) => (long)Math.Round(naira * 100, MidpointRounding.AwayFromZero);
 
-            using var hmac = new HMACSHA512(keyBytes);
-            byte[] hashBytes = hmac.ComputeHash(textBytes);
-            return BitConverter.ToString(hashBytes).Replace("-", "").ToLower();
+        private static bool SignatureMatches(string body, string key, string signatureHex)
+        {
+            using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(key));
+            var expected = hmac.ComputeHash(Encoding.UTF8.GetBytes(body));
+            byte[] provided;
+            try { provided = Convert.FromHexString(signatureHex); }
+            catch (FormatException) { return false; }
+            return CryptographicOperations.FixedTimeEquals(expected, provided);
         }
     }
 }

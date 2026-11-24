@@ -1,32 +1,70 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { MapPin, ShieldCheck, Star, CheckCircle2, AlertCircle, X, PlusCircle, CheckCircle, Users } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
+import {
+  MapPin, BadgeCheck, ShieldCheck, X, Plus, Check, Users, ArrowLeft, ArrowRight, Lock, ImageOff, ScrollText, Sparkles,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../utils/api';
-import { AuthContext } from '../context/AuthContext';
-
+import { format, parseISO, differenceInCalendarDays, addDays } from 'date-fns';
 import DatePicker from 'react-datepicker';
-import "react-datepicker/dist/react-datepicker.css";
+import 'react-datepicker/dist/react-datepicker.css';
+import api, { errorMessage } from '../utils/api';
+import { AuthContext } from '../context/AuthContext';
+import { Loader, Modal, Row } from '../components/ui';
+import { naira } from '../utils/format';
+
+function Gallery({ images, title }) {
+  const [active, setActive] = useState(0);
+  if (!images?.length) {
+    return (
+      <div className="grid aspect-[16/7] place-items-center rounded-2xl border border-line bg-sand text-faint">
+        <div className="flex flex-col items-center gap-2">
+          <ImageOff size={22} />
+          <span className="font-mono text-[11px] uppercase tracking-[0.08em]">No photos yet</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className="overflow-hidden rounded-2xl bg-sand">
+        <img src={images[active]} alt={title} className="aspect-[16/9] w-full object-cover md:aspect-[16/7]" />
+      </div>
+      {images.length > 1 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {images.map((src, i) => (
+            <button
+              key={src}
+              onClick={() => setActive(i)}
+              className={`h-16 w-24 shrink-0 overflow-hidden rounded-lg border-2 transition ${i === active ? 'border-ink' : 'border-transparent opacity-70 hover:opacity-100'}`}
+              aria-label={`Show photo ${i + 1}`}
+            >
+              <img src={src} alt="" className="h-full w-full object-cover" />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function PropertyDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { isAuthenticated, user } = useContext(AuthContext);
 
   const [property, setProperty] = useState(null);
   const [loading, setLoading] = useState(true);
-  
-  const [checkIn, setCheckIn] = useState(null); 
+
+  const [checkIn, setCheckIn] = useState(null);
   const [checkOut, setCheckOut] = useState(null);
-  const [nights, setNights] = useState(0);
-  const [bookedDates, setBookedDates] = useState([]); 
+  const [bookedDates, setBookedDates] = useState([]);
 
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [selectedAddOns, setSelectedAddOns] = useState([]);
   const [bookingLoading, setBookingLoading] = useState(false);
 
-  // --- NEW: SPLIT PAYMENT STATE ---
+  // Apartey Split
   const [isSplit, setIsSplit] = useState(false);
   const [splitWays, setSplitWays] = useState(2);
 
@@ -37,10 +75,10 @@ export default function PropertyDetails() {
         setProperty(propResponse.data);
 
         const datesResponse = await api.get(`/Properties/${id}/booked-dates`);
-        const unavailableDates = datesResponse.data.map(dateStr => new Date(dateStr));
-        setBookedDates(unavailableDates);
+        // "yyyy-MM-dd" strings are calendar days: parse them as local dates, not UTC midnight
+        setBookedDates(datesResponse.data.map((d) => parseISO(d)));
       } catch (error) {
-        toast.error("Failed to load property details.");
+        toast.error(errorMessage(error, 'Failed to load this property.'));
         navigate('/');
       } finally {
         setLoading(false);
@@ -49,339 +87,336 @@ export default function PropertyDetails() {
     fetchPropertyAndDates();
   }, [id, navigate]);
 
-  useEffect(() => {
-    if (checkIn && checkOut) {
-      const diffTime = Math.abs(checkOut - checkIn);
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-      
-      if (diffDays > 0 && checkIn < checkOut) {
-        setNights(diffDays);
-      } else {
-        setNights(0);
-      }
-    } else {
-      setNights(0);
-    }
-  }, [checkIn, checkOut]);
+  const nights = checkIn && checkOut ? Math.max(0, differenceInCalendarDays(checkOut, checkIn)) : 0;
 
-  const getNextBookedDate = () => {
-    if (!checkIn) return null;
-    const futureBookings = bookedDates.filter(date => date > checkIn).sort((a, b) => a - b);
-    return futureBookings.length > 0 ? futureBookings[0] : null;
-  };
-
-  const maxCheckOutDate = getNextBookedDate();
+  // Check-out can't go past the next booked night.
+  const maxCheckOutDate = checkIn
+    ? bookedDates.filter((d) => d > checkIn).sort((a, b) => a - b)[0] ?? null
+    : null;
 
   const handleInitiateCheckout = () => {
     if (!isAuthenticated) {
-      toast.error("Please login to book a property.");
-      return navigate('/login');
+      toast.error('Please log in to book this place.');
+      return navigate('/login', { state: { from: location.pathname } });
     }
-    if (user?.role === 'Host') {
-      return toast.error("Hosts cannot book properties.");
-    }
-    if (nights <= 0) {
-      return toast.error("Please select valid check-in and check-out dates.");
-    }
+    if (user?.role === 'host') return toast.error('Host accounts can’t make bookings. Log in with a guest account.');
+    if (nights <= 0) return toast.error('Choose your check-in and check-out dates.');
     setIsCheckoutModalOpen(true);
   };
 
   const toggleAddOn = (addon) => {
-    const exists = selectedAddOns.find(a => a.id === addon.id);
-    if (exists) {
-      setSelectedAddOns(selectedAddOns.filter(a => a.id !== addon.id));
-    } else {
-      setSelectedAddOns([...selectedAddOns, addon]);
-    }
+    setSelectedAddOns((prev) => (prev.some((a) => a.id === addon.id) ? prev.filter((a) => a.id !== addon.id) : [...prev, addon]));
   };
 
   const handleConfirmBooking = async () => {
     setBookingLoading(true);
     try {
-      const payload = { 
-        propertyId: id, 
-        checkIn: checkIn.toISOString(), 
-        checkOut: checkOut.toISOString(),
-        addOnIds: selectedAddOns.map(a => a.id),
-        isSplit: isSplit, // <-- Send Split Preference
-        splitWays: isSplit ? splitWays : 1
+      const payload = {
+        propertyId: id,
+        checkIn: format(checkIn, 'yyyy-MM-dd'), // date only: toISOString() shifted the day for UTC+1 users
+        checkOut: format(checkOut, 'yyyy-MM-dd'),
+        addOnIds: selectedAddOns.map((a) => a.id),
+        isSplit,
+        splitWays: isSplit ? splitWays : 1,
       };
       const response = await api.post('/Bookings', payload);
-      
-      // NEW: Redirect to Split Dashboard OR Paystack
+
       if (response.data.isSplit) {
-        toast.success("Split Group Created! Redirecting to your group dashboard...");
+        toast.success('Split group created. Share the payment links with your friends.');
         navigate(`/split-success/${response.data.splitGroupId}`);
       } else {
-        window.location.href = response.data.paymentUrl; 
+        window.location.href = response.data.paymentUrl;
       }
-
     } catch (error) {
-      toast.error(error.response?.data?.message || "Booking failed.");
+      toast.error(errorMessage(error, 'Booking failed.'));
     } finally {
       setBookingLoading(false);
     }
   };
 
-  if (loading) {
-    return <div className="min-h-screen flex justify-center items-center"><div className="w-12 h-12 border-4 border-brand border-t-transparent rounded-full animate-spin"></div></div>;
-  }
-
+  if (loading) return <Loader label="Loading stay" />;
   if (!property) return null;
 
   const totalRoomPrice = property.pricePerNight * nights;
-  const platformFee = totalRoomPrice * 0.05; 
-  const cautionFee = property.cautionFee || 0; 
-  const addOnsTotal = selectedAddOns.reduce((sum, addon) => sum + addon.price, 0);
+  const platformFee = Math.round(totalRoomPrice * 0.05 * 100) / 100;
+  const cautionFee = property.cautionFee || 0;
+  const addOnsTotal = selectedAddOns.reduce((sum, a) => sum + a.price, 0);
   const finalPrice = totalRoomPrice + platformFee + cautionFee + addOnsTotal;
-
-  // Split calculations
-  const splitAmount = isSplit ? (finalPrice / splitWays) : finalPrice;
+  const splitAmount = isSplit ? finalPrice / splitWays : finalPrice;
+  const location_ = [property.area, property.city, property.state].filter(Boolean).join(', ');
 
   return (
-    <div className="min-h-screen bg-white pb-24">
-      <style>{`
-        .react-datepicker__day--selected, .react-datepicker__day--in-selecting-range, .react-datepicker__day--in-range,
-        .react-datepicker__month-text--selected, .react-datepicker__month-text--in-selecting-range, .react-datepicker__month-text--in-range {
-          background-color: #0f172a !important; 
-          color: #d4af37 !important; 
-          font-weight: bold;
-        }
-        .react-datepicker__day--keyboard-selected { background-color: #0f172a !important; color: white !important; }
-        .react-datepicker__day--disabled { color: #ccc !important; text-decoration: line-through; }
-        .react-datepicker { font-family: inherit; border: 1px solid #e5e7eb; border-radius: 0.75rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
-        .react-datepicker__header { background-color: white; border-bottom: 1px solid #e5e7eb; border-top-left-radius: 0.75rem !important; border-top-right-radius: 0.75rem !important; }
-      `}</style>
+    <div className="page pb-24 pt-6">
+      <Link to="/#stays" className="btn-ghost btn-sm -ml-3 mb-4"><ArrowLeft size={14} /> All stays</Link>
 
-      <div className="max-w-7xl mx-auto px-6 lg:px-8 pt-8">
-        
-        {/* HEADER & GALLERY OMITTED FOR BREVITY BUT KEPT IN CODE */}
-        <div className="mb-6">
-          <h1 className="text-3xl md:text-4xl font-extrabold text-gray-900 mb-2">{property.title}</h1>
-          <div className="flex flex-wrap items-center gap-4 text-sm font-medium text-gray-600">
-            <span className="flex items-center gap-1"><Star size={16} className="text-yellow-500 fill-yellow-500" /> 4.9</span>
-            <span className="underline flex items-center gap-1"><MapPin size={16} /> {property.area}, {property.city}, {property.state}</span>
+      {/* Header */}
+      <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {property.type && <span className="chip-neutral">{property.type}</span>}
+            {property.hostVerificationStatus === 'Verified' && <span className="chip-lime"><BadgeCheck size={11} /> Verified host</span>}
           </div>
+          <h1 className="text-3xl font-light tracking-[-0.035em] md:text-5xl">{property.title}</h1>
+          <p className="mt-2 flex items-center gap-1.5 text-sm text-muted"><MapPin size={14} /> {location_}</p>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-4 grid-rows-2 gap-2 h-[50vh] min-h-[400px] mb-12 rounded-2xl overflow-hidden">
-          <div className="md:col-span-2 row-span-2 bg-gray-200">
-            <img src={property.imageUrls?.[0] || "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9"} alt="Main" className="w-full h-full object-cover" />
-          </div>
-          <div className="bg-gray-200 hidden md:block"><img src={property.imageUrls?.[1] || "https://images.unsplash.com/photo-1512917774080-9991f1c4c750"} className="w-full h-full object-cover" alt="Gallery"/></div>
-          <div className="bg-gray-200 hidden md:block"><img src={property.imageUrls?.[2] || "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c"} className="w-full h-full object-cover" alt="Gallery"/></div>
-          <div className="bg-gray-200 hidden md:block"><img src={property.imageUrls?.[3] || "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2"} className="w-full h-full object-cover" alt="Gallery"/></div>
-          <div className="bg-gray-200 hidden md:block"><img src={property.imageUrls?.[4] || "https://images.unsplash.com/photo-1505691938895-1758d7def511"} className="w-full h-full object-cover" alt="Gallery"/></div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-          
-          {/* LEFT COLUMN */}
-          <div className="lg:col-span-2 space-y-10">
-            <div className="flex justify-between items-start border-b border-gray-200 pb-8">
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-1">Entire {property.type} hosted by {property.hostName}</h2>
-              </div>
-            </div>
-            <div>
-              <h3 className="text-xl font-bold text-gray-900 mb-4">About this space</h3>
-              <p className="text-gray-600 leading-relaxed whitespace-pre-line">{property.description}</p>
-            </div>
-          </div>
-
-          {/* RIGHT COLUMN: Booking Widget */}
-          <div className="relative z-10">
-            <div className="sticky top-24 bg-white border border-gray-200 rounded-2xl p-6 shadow-xl">
-              <div className="mb-6">
-                <span className="text-2xl font-black text-gray-900">₦{property.pricePerNight.toLocaleString()}</span>
-                <span className="text-gray-500 font-medium"> / night</span>
-              </div>
-
-              {/* FIX: Removed 'overflow-hidden' from this wrapper so the calendar can pop out! */}
-              <div className="border border-gray-300 rounded-xl mb-4">
-                <div className="flex border-b border-gray-300">
-                  
-                  {/* FIX: Added 'rounded-tl-xl' to keep the top-left corner smooth */}
-                  <div className="w-1/2 p-3 border-r border-gray-300 relative cursor-pointer hover:bg-gray-50 transition-colors rounded-tl-xl">
-                    <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1 cursor-pointer">Check-in</label>
-                    <DatePicker
-                      selected={checkIn}
-                      onChange={(date) => { setCheckIn(date); setCheckOut(null); }}
-                      selectsStart startDate={checkIn} endDate={checkOut}
-                      minDate={new Date()} excludeDates={bookedDates}
-                      placeholderText="Add date" dateFormat="MMM d, yyyy"
-                      className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer font-bold placeholder-gray-400"
-                    />
-                  </div>
-
-                  {/* FIX: Added 'rounded-tr-xl' to keep the top-right corner smooth */}
-                  <div className={`w-1/2 p-3 relative transition-colors ${!checkIn ? 'opacity-50 cursor-not-allowed bg-gray-50' : 'cursor-pointer hover:bg-gray-50'} rounded-tr-xl`}>
-                    <label className="block text-[10px] font-extrabold uppercase text-gray-900 mb-1 cursor-pointer">Checkout</label>
-                    <DatePicker
-                      selected={checkOut} onChange={(date) => setCheckOut(date)}
-                      selectsEnd startDate={checkIn} endDate={checkOut}
-                      minDate={checkIn ? new Date(checkIn.getTime() + 86400000) : new Date()} 
-                      maxDate={maxCheckOutDate} excludeDates={bookedDates}
-                      placeholderText="Add date" disabled={!checkIn}
-                      dateFormat="MMM d, yyyy"
-                      className="w-full outline-none text-sm text-gray-700 bg-transparent cursor-pointer font-bold placeholder-gray-400 disabled:cursor-not-allowed"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <button 
-                onClick={handleInitiateCheckout}
-                disabled={nights <= 0}
-                className="w-full bg-brand hover:bg-gray-900 disabled:bg-gray-300 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md"
-              >
-                {nights > 0 ? 'Continue to Checkout' : 'Check Availability'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <p className="shrink-0 md:text-right">
+          <span className="mono text-2xl">{naira(property.pricePerNight)}</span>
+          <span className="text-sm text-faint"> / night</span>
+        </p>
       </div>
 
-      {/* --- THE CHECKOUT MODAL --- */}
-      <AnimatePresence>
-        {isCheckoutModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-sm">
-            <motion.div 
-              initial={{ opacity: 0, y: 50, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 20, scale: 0.95 }}
-              className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col md:flex-row overflow-hidden relative"
-            >
-              <button onClick={() => setIsCheckoutModalOpen(false)} className="absolute top-4 right-4 md:hidden z-10 bg-white p-2 rounded-full shadow-md text-gray-500 hover:text-red-500">
-                <X size={20} />
-              </button>
+      <Gallery images={property.imageUrls} title={property.title} />
 
-              {/* LEFT SIDE: SUMMARY */}
-              <div className="w-full md:w-5/12 bg-gray-50 border-r border-gray-200 p-6 md:p-8 overflow-y-auto hidden md:block">
-                <h3 className="text-2xl font-black text-brand mb-6">Your Stay</h3>
-                
-                <div className="flex gap-4 mb-8">
-                  <div className="w-24 h-24 rounded-xl overflow-hidden shadow-sm flex-shrink-0">
-                    <img src={property.imageUrls?.[0] || "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9"} alt="Property" className="w-full h-full object-cover" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{property.type}</p>
-                    <p className="font-bold text-gray-900 leading-tight line-clamp-2">{property.title}</p>
-                  </div>
-                </div>
+      <div className="mt-10 grid grid-cols-1 gap-10 lg:grid-cols-[1fr_380px]">
+        {/* LEFT */}
+        <div className="min-w-0 space-y-10">
+          <div className="flex items-center gap-3 border-b border-line pb-8">
+            <span className="grid h-10 w-10 place-items-center rounded-full bg-lime font-mono text-xs">
+              {(property.hostName || 'H').slice(0, 1).toUpperCase()}
+            </span>
+            <div>
+              <p className="text-[15px]">Hosted by {property.hostName}</p>
+              <p className="text-xs text-muted">
+                {property.hostVerificationStatus === 'Verified' ? 'Identity verified by Apartey' : 'Identity not yet verified'}
+              </p>
+            </div>
+          </div>
 
-                <div className="space-y-4 mb-8">
-                  <div className="flex justify-between border-b border-gray-200 pb-4">
+          {property.description && (
+            <section>
+              <p className="eyebrow mb-3">About this place</p>
+              <p className="whitespace-pre-line text-[15px] leading-relaxed text-ink/85">{property.description}</p>
+            </section>
+          )}
+
+          {property.amenities?.length > 0 && (
+            <section>
+              <p className="eyebrow mb-4">What’s included</p>
+              <ul className="grid gap-2 sm:grid-cols-2">
+                {property.amenities.map((a) => (
+                  <li key={a} className="flex items-center gap-2.5 text-sm">
+                    <span className="grid h-5 w-5 shrink-0 place-items-center rounded bg-lime"><Check size={12} /></span>{a}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {property.addOns?.length > 0 && (
+            <section>
+              <p className="eyebrow mb-4">Add-ons from your host</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {property.addOns.map((a) => (
+                  <div key={a.id} className="card flex items-start justify-between gap-3 p-4">
                     <div>
-                      <p className="font-bold text-gray-900">Dates</p>
-                      <p className="text-sm text-gray-500">{checkIn.toLocaleDateString()} – {checkOut.toLocaleDateString()}</p>
+                      <p className="flex items-center gap-1.5 text-sm font-medium"><Sparkles size={14} className="text-lime-deep" /> {a.name}</p>
+                      {a.description && <p className="mt-1 text-xs text-muted">{a.description}</p>}
                     </div>
-                    <span className="text-sm font-bold text-brand bg-brand/10 px-3 py-1 rounded-lg h-fit">{nights} Nights</span>
+                    <span className="mono shrink-0 text-sm">{naira(a.price)}</span>
                   </div>
-                </div>
-
-                <h4 className="font-bold text-gray-900 mb-4">Price Details</h4>
-                <div className="space-y-3 text-sm text-gray-600 mb-4">
-                  <div className="flex justify-between">
-                    <span>₦{property.pricePerNight.toLocaleString()} x {nights} nights</span>
-                    <span>₦{totalRoomPrice.toLocaleString()}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Platform Fee (5%)</span>
-                    <span>₦{platformFee.toLocaleString()}</span>
-                  </div>
-                  {cautionFee > 0 && (
-                    <div className="flex justify-between text-brand font-semibold pt-1">
-                      <span className="flex items-center gap-1"><ShieldCheck size={14}/> Caution Fee (Escrow)</span>
-                      <span>₦{cautionFee.toLocaleString()}</span>
-                    </div>
-                  )}
-                  {selectedAddOns.map(addon => (
-                    <div key={addon.id} className="flex justify-between text-brand font-medium">
-                      <span>+ {addon.name}</span>
-                      <span>₦{addon.price.toLocaleString()}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex justify-between items-center border-t border-gray-300 pt-4 mt-6">
-                  <span className="font-black text-gray-900">Total (NGN)</span>
-                  <span className="font-black text-2xl text-brand">₦{finalPrice.toLocaleString()}</span>
-                </div>
+                ))}
               </div>
+              <p className="hint">Choose add-ons at checkout.</p>
+            </section>
+          )}
 
-              {/* RIGHT SIDE: ADD-ONS & SPLIT */}
-              <div className="w-full md:w-7/12 p-6 md:p-8 flex flex-col max-h-[90vh]">
-                <div className="flex justify-between items-center mb-6 hidden md:flex">
-                  <h3 className="text-2xl font-black text-brand">Enhance Your Stay</h3>
-                  <button onClick={() => setIsCheckoutModalOpen(false)} className="text-gray-400 hover:text-red-500 transition-colors p-2"><X size={24} /></button>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto space-y-4 pr-2 mb-6">
-                  {property.addOns?.map(addon => {
-                    const isSelected = selectedAddOns.some(a => a.id === addon.id);
+          {property.houseRules?.length > 0 && (
+            <section>
+              <p className="eyebrow mb-4">House rules</p>
+              <ul className="divide-y divide-line rounded-2xl border border-line bg-paper">
+                {property.houseRules.map((r) => (
+                  <li key={r} className="flex items-center gap-3 px-4 py-3 text-sm"><ScrollText size={14} className="text-faint" /> {r}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {cautionFee > 0 && (
+            <section className="inset flex gap-3 p-5">
+              <Lock size={18} className="mt-0.5 shrink-0" />
+              <div className="text-sm">
+                <p className="font-medium">Refundable caution fee: <span className="mono">{naira(cautionFee)}</span></p>
+                <p className="mt-1 text-muted">Held in Apartey escrow, not paid to the host, and refunded if no damage is reported.</p>
+              </div>
+            </section>
+          )}
+        </div>
+
+        {/* RIGHT: booking widget */}
+        <aside className="min-w-0">
+          <div className="card sticky top-24 p-5 shadow-soft">
+            <p className="eyebrow mb-4">Reserve</p>
+            <div className="grid grid-cols-2 overflow-visible rounded-xl border border-line">
+              <label className="border-r border-line px-3 py-2.5">
+                <span className="block font-mono text-[10px] uppercase tracking-[0.08em] text-faint">Check-in</span>
+                <DatePicker
+                  selected={checkIn}
+                  onChange={(date) => { setCheckIn(date); setCheckOut(null); }}
+                  selectsStart startDate={checkIn} endDate={checkOut}
+                  minDate={new Date()} excludeDates={bookedDates}
+                  placeholderText="Add date" dateFormat="d MMM yyyy"
+                  className="w-full cursor-pointer bg-transparent text-sm outline-none placeholder:text-faint"
+                />
+              </label>
+              <label className={`px-3 py-2.5 ${!checkIn ? 'opacity-50' : ''}`}>
+                <span className="block font-mono text-[10px] uppercase tracking-[0.08em] text-faint">Check-out</span>
+                <DatePicker
+                  selected={checkOut} onChange={(date) => setCheckOut(date)}
+                  selectsEnd startDate={checkIn} endDate={checkOut}
+                  minDate={checkIn ? addDays(checkIn, 1) : new Date()}
+                  maxDate={maxCheckOutDate}
+                  // the next booking's first night is still a valid check-out day
+                  excludeDates={bookedDates.filter((d) => !maxCheckOutDate || d.getTime() !== maxCheckOutDate.getTime())}
+                  placeholderText="Add date" disabled={!checkIn} dateFormat="d MMM yyyy"
+                  popperPlacement="bottom-end"
+                  className="w-full cursor-pointer bg-transparent text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed"
+                />
+              </label>
+            </div>
+
+            {nights > 0 && (
+              <div className="mt-5 space-y-2 animate-fade-in">
+                <Row label={`${naira(property.pricePerNight)} × ${nights} night${nights > 1 ? 's' : ''}`} value={naira(totalRoomPrice)} />
+                <Row label="Platform fee (5%)" value={naira(platformFee)} />
+                {cautionFee > 0 && <Row label="Caution fee · refundable" value={naira(cautionFee)} />}
+                <Row label="Total before add-ons" value={naira(totalRoomPrice + platformFee + cautionFee)} strong className="border-t border-line pt-3" />
+              </div>
+            )}
+
+            <button onClick={handleInitiateCheckout} disabled={nights <= 0} className="btn-ink btn-lg mt-5 w-full">
+              {nights > 0 ? <>Continue <ArrowRight size={16} /></> : 'Select dates'}
+            </button>
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-faint">
+              <ShieldCheck size={13} /> You won’t be charged until you confirm
+            </p>
+          </div>
+        </aside>
+      </div>
+
+      {/* CHECKOUT */}
+      <Modal open={isCheckoutModalOpen} onClose={() => setIsCheckoutModalOpen(false)} title="Checkout" wide>
+        <div className="grid md:grid-cols-[1fr_1.15fr]">
+          {/* Summary */}
+          <div className="border-b border-line bg-cream p-6 md:border-b-0 md:border-r md:p-8">
+            <p className="eyebrow mb-4">Your stay</p>
+            <div className="flex gap-3">
+              <div className="h-16 w-20 shrink-0 overflow-hidden rounded-lg bg-sand">
+                {property.imageUrls?.[0] && <img src={property.imageUrls[0]} alt="" className="h-full w-full object-cover" />}
+              </div>
+              <div className="min-w-0">
+                <p className="line-clamp-2 text-sm font-medium">{property.title}</p>
+                <p className="mt-0.5 text-xs text-muted">{property.city}</p>
+              </div>
+            </div>
+            {checkIn && checkOut && (
+              <div className="inset mt-5 flex items-center justify-between px-4 py-3 text-sm">
+                <span>{format(checkIn, 'EEE d MMM')} → {format(checkOut, 'EEE d MMM')}</span>
+                <span className="chip-neutral">{nights} night{nights > 1 ? 's' : ''}</span>
+              </div>
+            )}
+            <div className="mt-6 space-y-2">
+              <Row label={`${naira(property.pricePerNight)} × ${nights}`} value={naira(totalRoomPrice)} />
+              <Row label="Platform fee (5%)" value={naira(platformFee)} />
+              {cautionFee > 0 && <Row label="Caution fee · escrow" value={naira(cautionFee)} />}
+              {selectedAddOns.map((a) => <Row key={a.id} label={`+ ${a.name}`} value={naira(a.price)} />)}
+            </div>
+            <div className="mt-5 flex items-center justify-between rounded-xl bg-ink px-4 py-3 text-cream">
+              <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-cream/70">Total</span>
+              <span className="mono text-lg">{naira(finalPrice)}</span>
+            </div>
+            {isSplit && (
+              <p className="mt-3 text-right text-xs text-muted">
+                Split {splitWays} ways ≈ <span className="mono text-ink">{naira(splitAmount)}</span> each
+              </p>
+            )}
+          </div>
+
+          {/* Options */}
+          <div className="flex flex-col p-6 md:p-8">
+            <div className="mb-5 flex items-center justify-between">
+              <h3 className="text-xl font-light tracking-[-0.02em]">Finish your booking</h3>
+              <button onClick={() => setIsCheckoutModalOpen(false)} className="btn-ghost btn-sm -mr-2" aria-label="Close"><X size={16} /></button>
+            </div>
+
+            {property.addOns?.length > 0 && (
+              <>
+                <p className="eyebrow mb-3">Add-ons</p>
+                <div className="space-y-2">
+                  {property.addOns.map((addon) => {
+                    const selected = selectedAddOns.some((a) => a.id === addon.id);
                     return (
-                      <div key={addon.id} onClick={() => toggleAddOn(addon)} className={`cursor-pointer p-5 rounded-2xl border-2 transition-all duration-300 flex items-center justify-between gap-4 ${isSelected ? 'border-brand bg-brand/5 shadow-md' : 'border-gray-100 bg-white hover:border-brand/30 hover:bg-gray-50 shadow-sm'}`}>
-                        <div className="flex-1">
-                          <h4 className={`font-bold text-lg mb-1 ${isSelected ? 'text-brand' : 'text-gray-900'}`}>{addon.name}</h4>
-                          <p className="text-brand font-black mt-1">₦{addon.price.toLocaleString()}</p>
+                      <button
+                        key={addon.id}
+                        type="button"
+                        onClick={() => toggleAddOn(addon)}
+                        aria-pressed={selected}
+                        className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3.5 text-left transition-colors ${selected ? 'border-ink bg-paper' : 'border-line hover:bg-cream'}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{addon.name}</p>
+                          {addon.description && <p className="truncate text-xs text-muted">{addon.description}</p>}
                         </div>
-                        <div className="flex-shrink-0">{isSelected ? <CheckCircle size={28} className="text-brand" /> : <PlusCircle size={28} className="text-gray-300 hover:text-brand" />}</div>
-                      </div>
+                        <div className="flex shrink-0 items-center gap-3">
+                          <span className="mono text-sm">{naira(addon.price)}</span>
+                          <span className={`grid h-6 w-6 place-items-center rounded-md ${selected ? 'bg-lime' : 'bg-sand'}`}>
+                            {selected ? <Check size={14} /> : <Plus size={14} />}
+                          </span>
+                        </div>
+                      </button>
                     );
                   })}
                 </div>
+              </>
+            )}
 
-                {/* --- NEW: THE APARTEY SPLIT UI SECTION --- */}
-                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 mb-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="bg-brand/10 p-2 rounded-lg"><Users size={20} className="text-brand"/></div>
-                      <div>
-                        <h4 className="font-bold text-gray-900 text-sm">Apartey Split</h4>
-                        <p className="text-xs text-gray-500">Split this booking with friends</p>
-                      </div>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" className="sr-only peer" checked={isSplit} onChange={() => setIsSplit(!isSplit)} />
-                      <div className="w-11 h-6 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand"></div>
-                    </label>
+            {/* Split */}
+            <div className="mt-6 rounded-xl border border-line p-4">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-9 w-9 place-items-center rounded-lg bg-sand"><Users size={16} /></span>
+                  <div>
+                    <p className="text-sm font-medium">Apartey Split</p>
+                    <p className="text-xs text-muted">Each friend pays their share from their own link</p>
                   </div>
-                  
-                  {isSplit && (
-                    <div className="mt-4 pt-4 border-t border-gray-200 animate-fade-in flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700">How many ways?</span>
-                      <select 
-                        value={splitWays} 
-                        onChange={(e) => setSplitWays(Number(e.target.value))}
-                        className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold focus:ring-brand outline-none"
-                      >
-                        {[2,3,4,5].map(num => <option key={num} value={num}>{num} People</option>)}
-                      </select>
-                    </div>
-                  )}
                 </div>
-
-                <div className="pt-4 border-t border-gray-100 mt-auto">
-                  <button 
-                    onClick={handleConfirmBooking}
-                    disabled={bookingLoading}
-                    className="w-full bg-brand hover:bg-gray-900 text-white font-bold py-4 rounded-xl text-lg transition-colors shadow-lg flex justify-center items-center gap-2 disabled:opacity-70"
-                  >
-                    {bookingLoading ? (
-                      <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Processing...</>
-                    ) : (
-                      isSplit ? `Pay Your Share (₦${splitAmount.toLocaleString()})` : 'Proceed to Payment'
-                    )}
-                  </button>
-                  <p className="text-center text-xs text-gray-400 mt-3 font-medium flex items-center justify-center gap-1">
-                    <ShieldCheck size={14}/> Secure payment via Paystack Escrow
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isSplit}
+                  onClick={() => setIsSplit(!isSplit)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${isSplit ? 'bg-ink' : 'bg-line'}`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-paper shadow transition-all ${isSplit ? 'left-[22px] bg-lime' : 'left-0.5'}`} />
+                </button>
               </div>
-              
-            </motion.div>
+              {isSplit && (
+                <div className="mt-4 flex items-center justify-between border-t border-line pt-4 animate-fade-in">
+                  <span className="text-sm text-muted">Split between</span>
+                  <div className="segmented">
+                    {[2, 3, 4, 5].map((n) => (
+                      <button key={n} type="button" aria-pressed={splitWays === n} onClick={() => setSplitWays(n)}>{n}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {isSplit && <p className="hint">Everyone has 24 hours to pay. The booking goes to the host once all shares are paid.</p>}
+            </div>
+
+            <div className="mt-auto pt-6">
+              <button onClick={handleConfirmBooking} disabled={bookingLoading} className="btn-lime btn-lg w-full">
+                {bookingLoading
+                  ? 'Processing…'
+                  : isSplit
+                    ? <>Create split group <ArrowRight size={16} /></>
+                    : <>Pay {naira(finalPrice)} <ArrowRight size={16} /></>}
+              </button>
+              <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-faint">
+                <Lock size={12} /> Secure payment via Paystack
+              </p>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      </Modal>
     </div>
   );
 }

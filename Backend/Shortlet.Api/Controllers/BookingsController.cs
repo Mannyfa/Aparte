@@ -1,17 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Security.Claims;
-using System.Text;
-using System.Text.Json;
-using System.Threading.Tasks;
+using System.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
+using Npgsql;
+using Shortlet.Api.Helpers;
 using Shortlet.Core.Entities;
+using Shortlet.Core.Interfaces;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
@@ -19,19 +13,20 @@ namespace Shortlet.Api.Controllers
     public class CreateBookingRequest
     {
         public Guid PropertyId { get; set; }
+        /// <summary>Calendar date ("yyyy-MM-dd"). Any time part is ignored.</summary>
         public DateTime CheckIn { get; set; }
         public DateTime CheckOut { get; set; }
-        public List<Guid>? AddOnIds { get; set; } 
-        
+        public List<Guid>? AddOnIds { get; set; }
+
         // --- APARTEY SPLIT PAYMENTS ---
         public bool IsSplit { get; set; } = false;
         public int SplitWays { get; set; } = 1;
     }
 
     // DTO for friends paying their share via WhatsApp link
-    public class PayShareRequest 
-    { 
-        public string Email { get; set; } 
+    public class PayShareRequest
+    {
+        public string? Email { get; set; }
     }
 
     [ApiController]
@@ -40,248 +35,248 @@ namespace Shortlet.Api.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IConfiguration _config;
+        private readonly IPaystackService _paystack;
+        private readonly ILogger<BookingsController> _logger;
 
-        public BookingsController(AppDbContext context, IConfiguration config)
+        public BookingsController(AppDbContext context, IConfiguration config, IPaystackService paystack, ILogger<BookingsController> logger)
         {
             _context = context;
             _config = config;
+            _paystack = paystack;
+            _logger = logger;
         }
 
+        private string FrontendUrl(string path) =>
+            (_config["Frontend:BaseUrl"] ?? "https://aparteyng.vercel.app").TrimEnd('/') + path;
+
         [HttpPost]
-        [Authorize] 
+        [Authorize]
         public async Task<IActionResult> CreateBooking([FromBody] CreateBookingRequest request)
         {
+            var guestId = User.GetUserId();
+            if (guestId == null) return Unauthorized(new { message = "User not logged in." });
+
+            var checkIn = BookingRules.ToUtcDate(request.CheckIn);
+            var checkOut = BookingRules.ToUtcDate(request.CheckOut);
+            var now = DateTime.UtcNow;
+            var nights = (int)(checkOut - checkIn).TotalDays;
+
+            if (nights <= 0) return BadRequest(new { message = "Check-out must be after check-in." });
+            if (checkIn < now.Date) return BadRequest(new { message = "Check-in date is in the past." });
+            if (nights > BookingRules.MaxNights) return BadRequest(new { message = $"Bookings are limited to {BookingRules.MaxNights} nights." });
+
+            var isSplit = request.IsSplit && request.SplitWays > 1;
+            if (isSplit && request.SplitWays > BookingRules.MaxSplitWays)
+                return BadRequest(new { message = $"A booking can be split at most {BookingRules.MaxSplitWays} ways." });
+
+            var guest = await _context.Users.FindAsync(guestId.Value);
+            if (guest == null) return Unauthorized(new { message = "User not found." });
+
+            var property = await _context.Properties.FindAsync(request.PropertyId);
+            if (property == null || property.Status == "suspended") return NotFound(new { message = "Property not found" });
+            if (property.HostId == guestId) return BadRequest(new { message = "You cannot book your own property." });
+
+            Booking booking;
+            SplitGroup? splitGroup = null;
+
+            // Serializable isolation: two guests racing for the same dates can't both pass the overlap check.
+            await using (var tx = await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable))
+            {
+                try
+                {
+                    var isOverlapping = await _context.Bookings
+                        .Where(b => b.PropertyId == property.Id && checkIn < b.CheckOut && checkOut > b.CheckIn)
+                        .BlockingDates(_context, now)
+                        .AnyAsync();
+
+                    if (isOverlapping)
+                        return Conflict(new { message = "Oops! Some of these dates were just booked by someone else." });
+
+                    // --- FINANCIAL MATH ---
+                    var totalRoomPrice = property.PricePerNight * nights;
+                    var platformFee = Math.Round(totalRoomPrice * BookingRules.PlatformFeeRate, 2);
+
+                    var verifiedAddOns = new List<PropertyAddOn>();
+                    if (request.AddOnIds is { Count: > 0 })
+                    {
+                        verifiedAddOns = await _context.PropertyAddOns
+                            .Where(a => request.AddOnIds.Contains(a.Id) && a.PropertyId == property.Id)
+                            .ToListAsync();
+                    }
+                    var addOnsTotal = verifiedAddOns.Sum(a => a.Price);
+                    var cautionFee = property.CautionFee;
+                    var finalPrice = totalRoomPrice + platformFee + addOnsTotal + cautionFee;
+
+                    var bookingId = Guid.NewGuid();
+                    booking = new Booking
+                    {
+                        Id = bookingId,
+                        PropertyId = property.Id,
+                        GuestId = guestId.Value,
+                        CheckIn = checkIn,
+                        CheckOut = checkOut,
+                        TotalPrice = finalPrice,
+                        ServiceFee = platformFee,
+                        CautionFeeAmount = cautionFee,
+                        CautionFeeStatus = cautionFee > 0 ? "Pending" : "None",
+                        Status = isSplit ? "split_pending" : "pending",
+                        CheckInCode = BookingRules.NewCheckInCode(),
+                        PaymentReference = bookingId.ToString()
+                    };
+                    _context.Bookings.Add(booking);
+
+                    foreach (var addon in verifiedAddOns)
+                        _context.BookingAddOns.Add(new BookingAddOn { BookingId = booking.Id, Name = addon.Name, Price = addon.Price });
+
+                    // =================================================================
+                    // THE APARTEY SPLIT ENGINE
+                    // =================================================================
+                    if (isSplit)
+                    {
+                        splitGroup = new SplitGroup
+                        {
+                            BookingId = booking.Id,
+                            TotalAmount = finalPrice,
+                            TotalShares = request.SplitWays,
+                            PaidShares = 0,
+                            ExpiresAt = now.AddHours(24)
+                        };
+                        _context.SplitGroups.Add(splitGroup);
+
+                        // The last person absorbs rounding so the shares add up exactly.
+                        var splitAmount = Math.Round(finalPrice / request.SplitWays, 2);
+                        decimal allocated = 0;
+                        for (int i = 0; i < request.SplitWays; i++)
+                        {
+                            var shareAmount = i == request.SplitWays - 1 ? finalPrice - allocated : splitAmount;
+                            allocated += shareAmount;
+                            var share = new SplitShare { SplitGroupId = splitGroup.Id, Amount = shareAmount };
+                            share.PaymentReference = BookingRules.NewSplitReference(share.Id);
+                            _context.SplitShares.Add(share);
+                        }
+                    }
+
+                    await _context.SaveChangesAsync();
+                    await tx.CommitAsync();
+                }
+                catch (Exception ex) when (IsSerializationFailure(ex))
+                {
+                    return Conflict(new { message = "Oops! Some of these dates were just booked by someone else." });
+                }
+            }
+
+            if (splitGroup != null)
+                return Ok(new { isSplit = true, splitGroupId = splitGroup.Id });
+
+            // =================================================================
+            // STANDARD PAYSTACK INITIALIZATION (solo payers)
+            // =================================================================
             try
             {
-                var guestIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (string.IsNullOrEmpty(guestIdStr)) return Unauthorized(new { message = "User not logged in." });
-                var guestId = Guid.Parse(guestIdStr);
-
-                var guest = await _context.Users.FindAsync(guestId);
-                var property = await _context.Properties.FindAsync(request.PropertyId);
-                if (property == null) return NotFound(new { message = "Property not found" });
-
-                var nights = (int)(request.CheckOut.Date - request.CheckIn.Date).TotalDays;
-                if (nights <= 0) return BadRequest(new { message = "Invalid check-in/out dates." });
-
-                // --- DOUBLE-BOOKING GUARDRAIL ---
-                var isOverlapping = await _context.Bookings.AnyAsync(b =>
-                    b.PropertyId == request.PropertyId &&
-                    (b.Status == "paid" || b.Status == "confirmed" || b.Status == "pending" || b.Status == "split_pending") &&
-                    request.CheckIn < b.CheckOut && request.CheckOut > b.CheckIn
-                );
-
-                if (isOverlapping) return BadRequest(new { message = "Oops! Some of these dates were just booked by someone else." });
-
-                // --- FINANCIAL MATH ---
-                var totalRoomPrice = property.PricePerNight * nights;
-                var platformFee = totalRoomPrice * 0.05m; 
-
-                decimal addOnsTotal = 0;
-                var verifiedAddOns = new List<PropertyAddOn>();
-
-                if (request.AddOnIds != null && request.AddOnIds.Any())
-                {
-                    verifiedAddOns = await _context.PropertyAddOns
-                        .Where(a => request.AddOnIds.Contains(a.Id) && a.PropertyId == property.Id)
-                        .ToListAsync();
-                    addOnsTotal = verifiedAddOns.Sum(a => a.Price);
-                }
-
-                var cautionFee = property.CautionFee; 
-                var finalPrice = totalRoomPrice + platformFee + addOnsTotal + cautionFee;
-
-                var bookingId = Guid.NewGuid(); 
-                
-                var booking = new Booking
-                {
-                    Id = bookingId,
-                    PropertyId = property.Id,
-                    GuestId = guestId,
-                    CheckIn = request.CheckIn,
-                    CheckOut = request.CheckOut,
-                    TotalPrice = finalPrice,
-                    CautionFeeAmount = cautionFee, 
-                    CautionFeeStatus = cautionFee > 0 ? "Pending" : "None", 
-                    
-                    // If splitting, hold the booking status until all friends pay!
-                    Status = request.IsSplit && request.SplitWays > 1 ? "split_pending" : "pending", 
-                    CheckInCode = new Random().Next(100000, 999999).ToString(),
-                    PaymentReference = bookingId.ToString() 
-                };
-                
-                _context.Bookings.Add(booking);
-
-                foreach (var addon in verifiedAddOns)
-                {
-                    _context.BookingAddOns.Add(new BookingAddOn { BookingId = booking.Id, Name = addon.Name, Price = addon.Price });
-                }
-
-                await _context.SaveChangesAsync(); // Save the booking first to generate its ID
-
-                // =================================================================
-                // 🚀 NEW: THE APARTEY SPLIT ENGINE 
-                // =================================================================
-                if (request.IsSplit && request.SplitWays > 1)
-                {
-                    var splitGroup = new SplitGroup
-                    {
-                        BookingId = booking.Id,
-                        TotalAmount = finalPrice,
-                        TotalShares = request.SplitWays,
-                        PaidShares = 0
-                    };
-                    _context.SplitGroups.Add(splitGroup);
-                    await _context.SaveChangesAsync(); 
-
-                    // Calculate slices. We give the last person any remaining Kobo to make the math flawless.
-                    decimal splitAmount = Math.Round(finalPrice / request.SplitWays, 2);
-                    decimal totalAllocated = 0;
-
-                    for (int i = 0; i < request.SplitWays; i++)
-                    {
-                        decimal shareAmount = (i == request.SplitWays - 1) ? (finalPrice - totalAllocated) : splitAmount;
-                        totalAllocated += shareAmount;
-
-                        _context.SplitShares.Add(new SplitShare
-                        {
-                            SplitGroupId = splitGroup.Id,
-                            Amount = shareAmount,
-                            // Webhook will use this 'SPLIT_' prefix to know it's a fractional payment!
-                            PaymentReference = $"SPLIT_{Guid.NewGuid()}" 
-                        });
-                    }
-                    await _context.SaveChangesAsync();
-
-                    // Tell the frontend to redirect the lead guest to their new Split Management Dashboard
-                    return Ok(new { isSplit = true, splitGroupId = splitGroup.Id });
-                }
-
-                // =================================================================
-                // 💳 STANDARD PAYSTACK INITIALIZATION (For Solo Payers)
-                // =================================================================
-                var paystackSecret = _config["PaystackSettings:SecretKey"] ?? _config["Paystack:SecretKey"]; 
-                if (string.IsNullOrEmpty(paystackSecret)) return StatusCode(500, new { message = "Paystack Key missing from backend config." });
-
-                using var client = new HttpClient();
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", paystackSecret);
-
-                var amountInKobo = (long)(finalPrice * 100);
-                var paystackPayload = new
-                {
-                    amount = amountInKobo,
-                    email = guest?.Email ?? "guest@apartey.com",
-                    reference = booking.Id.ToString(), 
-                    callback_url = "https://aparteyng.vercel.app/my-trips" 
-                };
-
-                var content = new StringContent(JsonSerializer.Serialize(paystackPayload), Encoding.UTF8, "application/json");
-                var response = await client.PostAsync("https://api.api.paystack.co/transaction/initialize", content);
-                var responseString = await response.Content.ReadAsStringAsync();
-                var paystackResult = JsonSerializer.Deserialize<JsonElement>(responseString);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    var authorizationUrl = paystackResult.GetProperty("data").GetProperty("authorization_url").GetString();
-                    return Ok(new { isSplit = false, paymentUrl = authorizationUrl });
-                }
-                else return BadRequest(new { message = "Failed to connect to Paystack Escrow." });
+                var paymentUrl = await _paystack.InitializePaymentAsync(
+                    booking.TotalPrice, booking.PaymentReference, guest.Email, FrontendUrl("/my-trips"));
+                return Ok(new { isSplit = false, paymentUrl });
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { message = "An internal error occurred: " + ex.Message });
+                _logger.LogError(ex, "Paystack initialization failed for booking {BookingId}", booking.Id);
+                booking.Status = "failed"; // release the dates immediately
+                await _context.SaveChangesAsync();
+                return StatusCode(502, new { message = "Could not start the payment. Please try again." });
             }
         }
 
+        private static bool IsSerializationFailure(Exception ex)
+        {
+            for (var e = ex; e != null; e = e.InnerException)
+                if (e is PostgresException pg && pg.SqlState == PostgresErrorCodes.SerializationFailure) return true;
+            return false;
+        }
+
         // =================================================================
-        // 📊 NEW: FETCH SPLIT GROUP DATA FOR LEAD GUEST DASHBOARD
+        // SPLIT GROUP DETAILS
+        // Anonymous on purpose: friends open this from a WhatsApp link without an account.
+        // The group id is an unguessable GUID and only non-personal data is returned.
         // =================================================================
         [HttpGet("split/{id}")]
-        [Authorize]
+        [AllowAnonymous]
         public async Task<IActionResult> GetSplitDetails(Guid id)
         {
             var splitGroup = await _context.SplitGroups
-                .Include(sg => sg.Booking)
-                .ThenInclude(b => b.Property)
+                .Include(sg => sg.Booking).ThenInclude(b => b.Property)
                 .Include(sg => sg.Shares)
                 .FirstOrDefaultAsync(sg => sg.Id == id);
 
-            if (splitGroup == null) return NotFound("Split group not found.");
+            if (splitGroup == null) return NotFound(new { message = "Split group not found." });
 
-            return Ok(new {
+            var expired = splitGroup.Status != "Completed" && splitGroup.ExpiresAt < DateTime.UtcNow;
+
+            return Ok(new
+            {
                 splitGroup.Id,
                 PropertyTitle = splitGroup.Booking.Property.Title,
+                splitGroup.Booking.CheckIn,
+                splitGroup.Booking.CheckOut,
                 splitGroup.TotalAmount,
                 splitGroup.TotalShares,
                 splitGroup.PaidShares,
-                splitGroup.Status,
+                Status = expired ? "Expired" : splitGroup.Status,
                 splitGroup.ExpiresAt,
-                Shares = splitGroup.Shares.Select(s => new {
-                    s.Id,
-                    s.Amount,
-                    s.Status
-                })
+                Shares = splitGroup.Shares.OrderBy(s => s.Amount).Select(s => new { s.Id, s.Amount, s.Status })
             });
         }
 
         // =================================================================
-        // 💸 NEW: PAY A SPECIFIC FRACTION VIA WHATSAPP LINK (No Login Required!)
+        // PAY A SPECIFIC SHARE VIA WHATSAPP LINK (no login required)
         // =================================================================
         [HttpPost("split/{shareId}/pay")]
-        [AllowAnonymous] 
+        [AllowAnonymous]
         public async Task<IActionResult> PaySplitShare(Guid shareId, [FromBody] PayShareRequest request)
         {
             var share = await _context.SplitShares
                 .Include(s => s.SplitGroup)
-                .ThenInclude(sg => sg.Booking)
                 .FirstOrDefaultAsync(s => s.Id == shareId);
 
-            if (share == null) return NotFound("Split share not found.");
-            if (share.Status == "Paid") return BadRequest("This share has already been paid!");
-            if (share.SplitGroup.ExpiresAt < DateTime.UtcNow) return BadRequest("This group payment window has expired.");
+            if (share == null) return NotFound(new { message = "Split share not found." });
+            if (share.Status == "Paid") return BadRequest(new { message = "This share has already been paid!" });
+            if (share.SplitGroup.Status != "Pending") return BadRequest(new { message = "This group booking is no longer collecting payments." });
+            if (share.SplitGroup.ExpiresAt < DateTime.UtcNow) return BadRequest(new { message = "This group payment window has expired." });
 
-            var paystackSecret = _config["PaystackSettings:SecretKey"] ?? _config["Paystack:SecretKey"]; 
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", paystackSecret);
+            var email = request.Email?.Trim();
+            if (string.IsNullOrEmpty(email) || !email.Contains('@'))
+                return BadRequest(new { message = "Please enter a valid email address for the receipt." });
 
-            var paystackPayload = new
+            // Paystack refuses to re-use a reference, so every attempt gets a fresh one.
+            share.PaymentReference = BookingRules.NewSplitReference(share.Id);
+            await _context.SaveChangesAsync();
+
+            try
             {
-                amount = (long)(share.Amount * 100), // Convert to Kobo
-                email = string.IsNullOrEmpty(request.Email) ? "friend@apartey.com" : request.Email,
-                reference = share.PaymentReference, // Uses the SPLIT_ Guid!
-                callback_url = $"https://aparteyng.vercel.app/split-success/{share.SplitGroupId}" 
-            };
-
-            var content = new StringContent(JsonSerializer.Serialize(paystackPayload), Encoding.UTF8, "application/json");
-            var response = await client.PostAsync("https://api.paystack.co/transaction/initialize", content);
-            
-            if (response.IsSuccessStatusCode)
-            {
-                var responseString = await response.Content.ReadAsStringAsync();
-                var paystackResult = JsonSerializer.Deserialize<JsonElement>(responseString);
-                var authorizationUrl = paystackResult.GetProperty("data").GetProperty("authorization_url").GetString();
-                
-                return Ok(new { paymentUrl = authorizationUrl });
+                var paymentUrl = await _paystack.InitializePaymentAsync(
+                    share.Amount, share.PaymentReference, email, FrontendUrl($"/split-success/{share.SplitGroupId}"));
+                return Ok(new { paymentUrl });
             }
-
-            return BadRequest("Failed to connect to Paystack for split payment.");
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Paystack initialization failed for split share {ShareId}", share.Id);
+                return StatusCode(502, new { message = "Failed to connect to Paystack for split payment." });
+            }
         }
 
-       [HttpGet("guest")]
-       [Authorize]
+        [HttpGet("guest")]
+        [Authorize]
         public async Task<IActionResult> GetGuestBookings()
         {
-            var guestIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(guestIdStr)) return Unauthorized();
-            var guestId = Guid.Parse(guestIdStr);
+            var guestId = User.GetUserId();
+            if (guestId == null) return Unauthorized();
 
             var bookings = await _context.Bookings
-                .Include(b => b.Property)
-                .Include(b => b.PurchasedAddOns) 
-                .Where(b => b.GuestId == guestId)
+                .Where(b => b.GuestId == guestId.Value && b.Status != "failed")
                 .OrderByDescending(b => b.CreatedAt)
-                .Select(b => new {
+                .Select(b => new
+                {
                     b.Id,
+                    b.PropertyId,
                     PropertyTitle = b.Property.Title,
                     City = b.Property.City,
                     ImageUrl = b.Property.ImageUrls.FirstOrDefault(),
@@ -289,8 +284,10 @@ namespace Shortlet.Api.Controllers
                     b.CheckOut,
                     b.TotalPrice,
                     b.Status,
-                    b.CheckInCode,
-                    AddOns = b.PurchasedAddOns 
+                    // Only reveal the gate code once the host has confirmed the stay.
+                    CheckInCode = b.Status == "confirmed" || b.Status == "completed" ? b.CheckInCode : null,
+                    AddOns = b.PurchasedAddOns.Select(a => new { a.Id, a.Name, a.Price }),
+                    HasReviewed = _context.Reviews.Any(r => r.PropertyId == b.PropertyId && r.GuestId == guestId.Value)
                 })
                 .ToListAsync();
 

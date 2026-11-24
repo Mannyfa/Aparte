@@ -1,18 +1,31 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { 
-  LayoutDashboard, Home as HomeIcon, Calendar, ClipboardList, 
-  MessageSquare, Wallet, Star, ShieldCheck, Settings, Plus, Upload, 
-  TrendingUp, AlertCircle, Key, XCircle, Check, User, RefreshCw, ConciergeBell, MapPin, X
+import React, { useState, useEffect, useContext } from 'react';
+import { Link, Navigate } from 'react-router-dom';
+import {
+  LayoutDashboard, Home as HomeIcon, ClipboardList, Wallet, ShieldCheck, Plus, Upload, Check, X, RefreshCw,
+  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../utils/api';
+import api, { errorMessage } from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import BrandLoader from '../components/BrandLoader'; 
+import BrandLoader from '../components/BrandLoader';
+import { EmptyState, StatusBadge, Modal } from '../components/ui';
+import { naira, formatDay, nightsBetween, initials } from '../utils/format';
+
+function PageHead({ eyebrow, title, lead, action }) {
+  return (
+    <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+      <div>
+        <p className="eyebrow mb-3">{eyebrow}</p>
+        <h1 className="text-3xl font-light tracking-[-0.035em] md:text-4xl">{title}</h1>
+        {lead && <p className="mt-2 text-sm text-muted">{lead}</p>}
+      </div>
+      {action}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { user, isAuthenticated } = useContext(AuthContext);
-  const navigate = useNavigate();
   
   // --- STATE MANAGEMENT ---
   const [activeTab, setActiveTab] = useState(() => {
@@ -141,26 +154,24 @@ export default function Dashboard() {
     }
   }, [activeTab]);
 
+  // Verification status is needed on every tab (listing limit, verified badge), so it loads on every tab change.
   useEffect(() => {
-    if (activeTab === 'verification') {
-      const fetchVerification = async () => {
-        setFetchingVerification(true);
-        try {
-          const response = await api.get('/Verification/status');
-          setVerificationData(response.data);
-        } catch (error) {
-          setVerificationData({ status: 'Unverified' });
-        } finally {
-          setFetchingVerification(false);
-        }
-      };
-      fetchVerification();
-    }
+    const fetchVerification = async () => {
+      setFetchingVerification(true);
+      try {
+        const response = await api.get('/Verification/status');
+        setVerificationData(response.data);
+      } catch (error) {
+        setVerificationData({ status: 'Unverified' });
+      } finally {
+        setFetchingVerification(false);
+      }
+    };
+    fetchVerification();
   }, [activeTab]);
 
-  if (!isAuthenticated || user?.role !== 'Host') {
-    return null;
-  }
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (user?.role !== 'host') return <Navigate to="/" replace />;
 
   // --- HANDLERS ---
   const handleInputChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -210,7 +221,7 @@ export default function Dashboard() {
       
       if (activeTab === 'listings') { setActiveTab('overview'); setTimeout(() => setActiveTab('listings'), 100); }
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to list property.');
+      toast.error(errorMessage(error, 'Failed to list property.'));
     } finally {
       setLoading(false);
     }
@@ -222,17 +233,18 @@ export default function Dashboard() {
       toast.success("Booking confirmed! Check-in code generated.");
       setActiveTab('overview'); setTimeout(() => setActiveTab('bookings'), 100);
     } catch (error) {
-      toast.error("Failed to accept booking.");
+      toast.error(errorMessage(error, "Failed to accept booking."));
     }
   };
 
   const handleRejectBooking = async (id) => {
     try {
-      await api.post(`/HostBookings/${id}/reject`);
-      toast.success("Booking rejected and guest refunded.");
+      if (!window.confirm("Reject this booking? Any payment will be refunded to the guest.")) return;
+      const response = await api.post(`/HostBookings/${id}/reject`);
+      toast.success(response.data?.message || "Booking rejected.");
       setActiveTab('overview'); setTimeout(() => setActiveTab('bookings'), 100);
     } catch (error) {
-      toast.error("Failed to reject booking.");
+      toast.error(errorMessage(error, "Failed to reject booking."));
     }
   };
 
@@ -260,591 +272,559 @@ export default function Dashboard() {
       kycFormData.append('document', kycFile);
       kycFormData.append('documentType', kycDocType);
       
-      setTimeout(() => {
-        toast.success("Verification request submitted successfully! Our team is reviewing it.");
-        setVerificationData({ status: 'Pending', documentUrl: null });
-        setUploadingKyc(false);
-      }, 1500);
-
+      const response = await api.post('/Verification/upload', kycFormData);
+      toast.success(response.data?.message || "Verification request submitted! Our team is reviewing it.");
+      setVerificationData({ status: response.data?.status || 'Pending', documentUrl: response.data?.documentUrl || null });
+      setKycFile(null);
     } catch (error) {
-      toast.error(error.response?.data?.message || "Upload failed. Please try again.");
+      toast.error(errorMessage(error, "Upload failed. Please try again."));
+    } finally {
       setUploadingKyc(false);
     }
   };
 
-  // --- SIDEBAR CONFIGURATION ---
+  const handleWithdraw = async (e) => {
+    e.preventDefault();
+    const amount = Number(withdrawData.amount);
+    if (!amount || amount < 1000) return toast.error("Minimum withdrawal is ₦1,000.");
+    if (amount > wallet.balance) return toast.error("That's more than your available balance.");
+    if (!/^\d{10}$/.test(withdrawData.accountNumber)) return toast.error("Account number must be 10 digits.");
+
+    setIsWithdrawing(true);
+    try {
+      const response = await api.post('/Wallet/withdraw', { ...withdrawData, amount });
+      toast.success(response.data?.message || "Withdrawal initiated!");
+      setIsWithdrawModalOpen(false);
+      setWithdrawData({ amount: '', accountNumber: '', bankCode: withdrawData.bankCode });
+      const walletRes = await api.get('/Wallet');
+      setWallet(walletRes.data);
+    } catch (error) {
+      toast.error(errorMessage(error, "Withdrawal failed."));
+    } finally {
+      setIsWithdrawing(false);
+    }
+  };
+
+  // --- NAVIGATION ---
   const sidebarLinks = [
     { id: 'overview', icon: LayoutDashboard, label: 'Overview' },
     { id: 'listings', icon: HomeIcon, label: 'Listings' },
     { id: 'bookings', icon: ClipboardList, label: 'Bookings' },
-    { id: 'earnings', icon: Wallet, label: 'Earnings & Payouts' },
-    { id: 'verification', icon: ShieldCheck, label: 'Trust & Verification' },
-    { id: 'settings', icon: Settings, label: 'Settings' },
+    { id: 'earnings', icon: Wallet, label: 'Earnings' },
+    { id: 'verification', icon: ShieldCheck, label: 'Verification' },
   ];
+  // An old saved tab (e.g. the removed "settings") falls back to the overview.
+  const tab = sidebarLinks.some((l) => l.id === activeTab) ? activeTab : 'overview';
+  const isVerified = verificationData.status === 'Verified';
+  const listingLimitReached = hostProperties.length >= 2 && !isVerified;
+
+  // What the host actually receives: room rate (total minus the 5% fee, caution fee and add-ons) plus add-ons.
+  const hostPayout = (b) => {
+    const addOnsTotal = parseAddOns(b.addOns).reduce((s, a) => s + Number(a.price || 0), 0);
+    const roomWithFee = b.totalPrice - (b.cautionFee || 0) - addOnsTotal;
+    return roomWithFee / 1.05 + addOnsTotal;
+  };
+
+  const startNewListing = () => {
+    if (listingLimitReached) {
+      toast.error('Standard hosts can list 2 properties. Verify your ID to unlock unlimited listings.');
+      setActiveTab('verification');
+    } else {
+      setIsAddingListing(true);
+      setActiveTab('listings');
+    }
+  };
+
 
   // --- TAB RENDERERS ---
   const renderOverview = () => {
     if (fetchingOverview || !overview) return <BrandLoader />;
-
+    const stats = [
+      { label: 'Available balance', value: naira(overview.availableBalance), hint: 'Ready to withdraw' },
+      { label: 'Earned this month', value: naira(overview.earningsThisMonth), hint: 'Credited to your wallet' },
+      { label: 'Upcoming stays', value: overview.upcomingBookingsCount ?? 0, hint: 'Confirmed bookings' },
+      { label: 'Occupied today', value: `${overview.occupancyRate ?? 0}%`, hint: 'Of your listings' },
+    ];
     return (
-      <div className="space-y-6 animate-fade-in">
-        <div className="flex justify-between items-center">
-          <div>
-            <h2 className="text-2xl font-bold text-brand flex items-center gap-2">
-              Welcome back, {user?.name}! 
-              {verificationData.status === 'Verified' && <ShieldCheck size={20} className="text-green-500"/>}
-            </h2>
-            <p className="text-gray-500 text-sm">Here is what is happening with your properties today.</p>
-          </div>
+      <div className="animate-fade-in">
+        <PageHead
+          eyebrow="Overview"
+          title={<>Welcome back, {user?.name?.split(' ')[0]}</>}
+          lead="Here’s what’s happening across your listings."
+          action={<button onClick={startNewListing} className="btn-lime"><Plus size={16} /> New listing</button>}
+        />
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {stats.map((s) => (
+            <div key={s.label} className="card p-5">
+              <p className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-faint">{s.label}</p>
+              <p className="mono mt-3 text-2xl">{s.value}</p>
+              <p className="mt-1 text-xs text-muted">{s.hint}</p>
+            </div>
+          ))}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-            <p className="text-sm font-semibold text-gray-500 mb-1">Total Earnings</p>
-            <h3 className="text-2xl font-bold text-brand">₦{overview.earningsThisMonth?.toLocaleString() || 0}</h3>
-            <p className="text-xs text-green-600 flex items-center mt-2 font-semibold"><TrendingUp size={14} className="mr-1"/> Automatically Calculated</p>
+        {!isVerified && (
+          <div className="mt-4 flex flex-col gap-3 rounded-2xl bg-lime p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium">{verificationData.status === 'Pending' ? 'Your ID is being reviewed' : 'Get the Verified badge'}</p>
+              <p className="text-xs text-ink/70">
+                {verificationData.status === 'Pending' ? 'This usually takes 24–48 hours.' : 'Verified hosts get unlimited listings and a badge guests can see.'}
+              </p>
+            </div>
+            {verificationData.status !== 'Pending' && (
+              <button onClick={() => setActiveTab('verification')} className="btn-ink btn-sm">Verify now <ArrowRight size={14} /></button>
+            )}
           </div>
-          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-            <p className="text-sm font-semibold text-gray-500 mb-1">Occupancy Rate</p>
-            <h3 className="text-2xl font-bold text-brand">{overview.occupancyRate || 0}%</h3>
-            <p className="text-xs text-green-600 flex items-center mt-2 font-semibold"><TrendingUp size={14} className="mr-1"/> Based on active bookings</p>
+        )}
+
+        <div className="mt-10">
+          <div className="mb-4 flex items-center justify-between">
+            <p className="eyebrow">Recent requests</p>
+            <button onClick={() => setActiveTab('bookings')} className="btn-ghost btn-sm">All bookings <ArrowRight size={14} /></button>
           </div>
-          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-            <p className="text-sm font-semibold text-gray-500 mb-1">Upcoming Bookings</p>
-            <h3 className="text-2xl font-bold text-brand">{overview.upcomingBookingsCount || 0}</h3>
-            <p className="text-xs text-gray-500 mt-2 font-semibold">Confirmed reservations</p>
-          </div>
-          <div className="bg-white p-5 rounded-xl border border-gray-100 shadow-sm">
-            <p className="text-sm font-semibold text-gray-500 mb-1">Listing Views</p>
-            <h3 className="text-2xl font-bold text-brand">{overview.listingViews?.toLocaleString() || 0}</h3>
-            <p className="text-xs text-gray-500 mt-2 font-semibold">Across all your properties</p>
-          </div>
+          {overview.recentRequests?.length ? (
+            <ul className="card divide-y divide-line">
+              {overview.recentRequests.map((r) => (
+                <li key={r.id} className="flex items-center justify-between gap-4 p-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-sand font-mono text-xs">{r.guestInitials || initials(r.guestName)}</span>
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{r.guestName} · <span className="font-normal text-muted">{r.propertyTitle}</span></p>
+                      <p className="font-mono text-[11px] text-faint">{formatDay(r.checkIn)} → {formatDay(r.checkOut)}</p>
+                    </div>
+                  </div>
+                  <StatusBadge status={r.status} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState icon={ClipboardList} title="No booking requests yet">Requests from guests will show up here.</EmptyState>
+          )}
         </div>
       </div>
     );
   };
 
-  const renderListings = () => (
+  const renderListingForm = () => (
     <div className="animate-fade-in">
-      {!isAddingListing ? (
-        <>
-          <div className="flex justify-between items-center mb-6">
+      <button onClick={() => setIsAddingListing(false)} className="btn-ghost btn-sm -ml-3 mb-4"><ArrowLeft size={14} /> Back to listings</button>
+      <PageHead eyebrow="New listing" title="List a place" lead="Fill in the details guests need. You can list up to 5 photos." />
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <section className="card card-pad">
+          <p className="eyebrow mb-5">01 · The basics</p>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="label" htmlFor="title">Title</label>
+              <input id="title" required name="title" value={formData.title} onChange={handleInputChange} placeholder="e.g. Bright 2-bed apartment with pool" className="input" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="label" htmlFor="description">Description</label>
+              <textarea id="description" required name="description" rows="4" value={formData.description} onChange={handleInputChange} placeholder="The layout, the vibe, what’s nearby…" className="input" />
+            </div>
             <div>
-              <h2 className="text-2xl font-bold text-brand flex items-center gap-2">
-                Your Properties 
-                <span className="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded-full">{hostProperties.length} / {verificationData.status === 'Verified' ? 'Unlimited' : '2'} Used</span>
-              </h2>
-              <p className="text-gray-500 text-sm">Manage pricing, amenities, and local features.</p>
+              <label className="label" htmlFor="type">Property type</label>
+              <select id="type" name="type" value={formData.type} onChange={handleInputChange} className="input">
+                {['Apartment', 'Penthouse', 'Duplex', 'Studio'].map((t) => <option key={t}>{t}</option>)}
+              </select>
             </div>
-            <button 
-              onClick={() => {
-                if (hostProperties.length >= 2 && verificationData.status !== 'Verified') {
-                  toast.error("Standard hosts can only list 2 properties. Please verify your account to unlock unlimited listings.");
-                  setActiveTab('verification');
-                } else {
-                  setIsAddingListing(true);
-                }
-              }} 
-              className="bg-brand hover:bg-gray-800 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 shadow-sm transition-colors"
-            >
-              <Plus size={18} /> Add New Listing
-            </button>
+            <div>
+              <label className="label" htmlFor="pricePerNight">Price per night (₦)</label>
+              <input id="pricePerNight" required min="1" type="number" name="pricePerNight" value={formData.pricePerNight} onChange={handleInputChange} placeholder="85000" className="input mono" />
+            </div>
+            <div className="md:col-span-2">
+              <label className="label" htmlFor="cautionFee">Refundable caution fee (₦) <span className="font-normal text-faint">optional</span></label>
+              <input id="cautionFee" min="0" type="number" name="cautionFee" value={formData.cautionFee} onChange={handleInputChange} placeholder="50000" className="input mono md:w-1/2" />
+              <p className="hint">Charged to the guest and held in Apartey escrow, then refunded if nothing is damaged.</p>
+            </div>
           </div>
-          
-           {fetchingListings ? (
-            <BrandLoader />
-          ) : hostProperties.length === 0 ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-12 text-center shadow-sm">
-              <HomeIcon size={48} className="mx-auto text-gray-300 mb-4" />
-              <h3 className="text-lg font-bold text-gray-700 mb-2">You haven't added properties recently</h3>
-              <p className="text-gray-500 mb-6 max-w-md mx-auto">Upload your luxury shortlets and set Nigerian-specific amenities like 24/7 Power, Estate Security, and Water access.</p>
-              <button onClick={() => setIsAddingListing(true)} className="bg-brand hover:bg-gray-800 text-white px-6 py-2 rounded-lg font-bold transition-colors">
-                Start your first listing
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {hostProperties.map(property => (
-                <div key={property.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                  <div className="h-40 bg-gray-200 relative">
-                    {property.imageUrls && property.imageUrls.length > 0 ? (
-                      <img src={property.imageUrls[0]} alt={property.title} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-gray-400">No Image</div>
-                    )}
-                    <div className="absolute top-2 right-2 bg-white px-2 py-1 rounded-md text-xs font-bold text-brand shadow">
-                      ₦{property.pricePerNight.toLocaleString()}/nt
-                    </div>
-                  </div>
-                  <div className="p-4">
-                    <h3 className="font-bold text-brand truncate mb-1">{property.title}</h3>
-                    <p className="text-xs text-gray-500 mb-3">{property.city}, {property.state}</p>
-                  </div>
+        </section>
+
+        <section className="card card-pad">
+          <p className="eyebrow mb-5">02 · Location</p>
+          <div className="grid gap-4 md:grid-cols-3">
+            {[['state', 'State', 'Lagos'], ['city', 'City', 'Lekki'], ['area', 'Area / estate', 'Phase 1']].map(([name, label, ph]) => (
+              <div key={name}>
+                <label className="label" htmlFor={name}>{label}</label>
+                <input id={name} required name={name} value={formData[name]} onChange={handleInputChange} placeholder={ph} className="input" />
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card card-pad">
+          <p className="eyebrow mb-5">03 · Amenities & house rules</p>
+          <div className="grid gap-8 md:grid-cols-2">
+            {[
+              ['Amenities', availableAmenities, selectedAmenities, setSelectedAmenities],
+              ['House rules', availableRules, selectedRules, setSelectedRules],
+            ].map(([title, options, selected, setSelected]) => (
+              <div key={title}>
+                <p className="mb-3 text-sm font-medium">{title}</p>
+                <div className="flex flex-wrap gap-2">
+                  {options.map((opt) => {
+                    const on = selected.includes(opt);
+                    return (
+                      <button
+                        type="button"
+                        key={opt}
+                        aria-pressed={on}
+                        onClick={() => setSelected(on ? selected.filter((x) => x !== opt) : [...selected, opt])}
+                        className={`rounded-lg border px-3 py-1.5 text-left text-[13px] transition-colors ${on ? 'border-ink bg-ink text-cream' : 'border-line bg-paper text-muted hover:text-ink'}`}
+                      >
+                        {opt}
+                      </button>
+                    );
+                  })}
                 </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="card card-pad">
+          <p className="eyebrow mb-2">04 · Add-ons</p>
+          <p className="mb-5 text-sm text-muted">Optional extras guests can book with their stay, like an airport pickup or a private chef. You keep 100%.</p>
+          <div className="grid gap-2 md:grid-cols-[1fr_1.5fr_0.8fr_auto]">
+            <input placeholder="Name" value={newAddOn.name} onChange={(e) => setNewAddOn({ ...newAddOn, name: e.target.value })} className="input" />
+            <input placeholder="Short description" value={newAddOn.description} onChange={(e) => setNewAddOn({ ...newAddOn, description: e.target.value })} className="input" />
+            <input type="number" min="0" placeholder="₦ price" value={newAddOn.price} onChange={(e) => setNewAddOn({ ...newAddOn, price: e.target.value })} className="input mono" />
+            <button type="button" onClick={handleAddAddOn} className="btn-outline"><Plus size={14} /> Add</button>
+          </div>
+          {addOns.length > 0 && (
+            <ul className="mt-4 divide-y divide-line rounded-xl border border-line">
+              {addOns.map((a) => (
+                <li key={a.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="text-sm">{a.name} <span className="mono ml-2 text-muted">{naira(a.price)}</span></p>
+                    {a.description && <p className="truncate text-xs text-faint">{a.description}</p>}
+                  </div>
+                  <button type="button" onClick={() => removeAddOn(a.id)} className="btn-ghost btn-sm" aria-label={`Remove ${a.name}`}><X size={14} /></button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="card card-pad">
+          <p className="eyebrow mb-5">05 · Photos</p>
+          <input type="file" multiple accept="image/*" onChange={(e) => setSelectedImages(Array.from(e.target.files).slice(0, 5))} className="sr-only" id="property-images" />
+          <label htmlFor="property-images" className="flex cursor-pointer flex-col items-center rounded-xl border border-dashed border-line bg-cream px-6 py-10 text-center transition-colors hover:bg-sand/60">
+            <span className="mb-3 grid h-10 w-10 place-items-center rounded-lg bg-paper"><Upload size={18} /></span>
+            <span className="text-sm font-medium">{selectedImages.length > 0 ? `${selectedImages.length} photo${selectedImages.length > 1 ? 's' : ''} selected` : 'Choose photos'}</span>
+            <span className="mt-1 text-xs text-faint">JPG or PNG, up to 10 MB each · max 5</span>
+          </label>
+          {selectedImages.length > 0 && (
+            <div className="mt-3 flex gap-2 overflow-x-auto">
+              {selectedImages.map((f) => (
+                <img key={f.name + f.size} src={URL.createObjectURL(f)} alt="" className="h-16 w-24 shrink-0 rounded-lg object-cover" />
               ))}
             </div>
           )}
-        </>
-      ) : (
-        <div className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-gray-100 animate-fade-in max-w-4xl mx-auto">
-          <div className="flex justify-between items-center mb-8 border-b border-gray-100 pb-4">
-            <div>
-              <h2 className="text-2xl font-black text-brand">Create New Listing</h2>
-              <p className="text-sm text-gray-500">Fill in the details below to publish your property.</p>
-            </div>
-            <button onClick={() => setIsAddingListing(false)} className="text-gray-400 hover:text-red-500 transition-colors p-2">
-              <XCircle size={28} />
-            </button>
+        </section>
+
+        <div className="flex justify-end gap-2 pb-6">
+          <button type="button" onClick={() => setIsAddingListing(false)} className="btn-ghost btn-lg">Cancel</button>
+          <button type="submit" disabled={loading} className="btn-ink btn-lg">
+            {loading ? <><RefreshCw size={16} className="animate-spin" /> Publishing…</> : <><Check size={16} /> Publish listing</>}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+
+  const renderListings = () => {
+    if (isAddingListing) return renderListingForm();
+    return (
+      <div className="animate-fade-in">
+        <PageHead
+          eyebrow="Listings"
+          title="Your places"
+          lead={`${hostProperties.length} of ${isVerified ? 'unlimited' : '2'} listings used`}
+          action={<button onClick={startNewListing} className="btn-lime"><Plus size={16} /> New listing</button>}
+        />
+        {fetchingListings ? (
+          <BrandLoader />
+        ) : hostProperties.length === 0 ? (
+          <EmptyState icon={HomeIcon} title="No listings yet" action={<button onClick={startNewListing} className="btn-ink">Create your first listing</button>}>
+            Add photos, a nightly price and the amenities guests care about, like 24/7 power and estate security.
+          </EmptyState>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {hostProperties.map((p) => (
+              <Link key={p.id} to={`/property/${p.id}`} className="card group overflow-hidden transition-shadow hover:shadow-lift">
+                <div className="aspect-[16/10] bg-sand">
+                  {p.imageUrls?.length > 0
+                    ? <img src={p.imageUrls[0]} alt={p.title} className="h-full w-full object-cover" />
+                    : <div className="grid h-full place-items-center text-faint"><ImageOff size={18} /></div>}
+                </div>
+                <div className="p-4">
+                  <p className="truncate font-medium">{p.title}</p>
+                  <p className="mt-0.5 text-xs text-muted">{[p.city, p.state].filter(Boolean).join(', ')}</p>
+                  <p className="mt-3 border-t border-line pt-3"><span className="mono">{naira(p.pricePerNight)}</span><span className="text-xs text-faint"> / night</span></p>
+                </div>
+              </Link>
+            ))}
           </div>
+        )}
+      </div>
+    );
+  };
 
-          <form onSubmit={handleSubmit} className="space-y-10">
-            
-            {/* 1. Basic Details */}
-            <section>
-              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><HomeIcon size={18} className="text-accent" /> Property Details</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-gray-50 p-6 rounded-xl border border-gray-100">
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Property Title</label>
-                  <input required type="text" name="title" value={formData.title} onChange={handleInputChange} placeholder="e.g. Luxury 4-Bed Penthouse with Pool" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
-                </div>
-                <div className="md:col-span-2">
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Description</label>
-                  <textarea required name="description" rows="3" value={formData.description} onChange={handleInputChange} placeholder="Describe the vibe, layout, and unique features..." className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none"></textarea>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Property Type</label>
-                  <select name="type" value={formData.type} onChange={handleInputChange} className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none">
-                    <option value="Apartment">Apartment</option>
-                    <option value="Penthouse">Penthouse</option>
-                    <option value="Duplex">Duplex</option>
-                    <option value="Studio">Studio</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Price Per Night (₦)</label>
-                  <input required type="number" name="pricePerNight" value={formData.pricePerNight} onChange={handleInputChange} placeholder="e.g. 150000" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
-                </div>
-                
-                <div className="md:col-span-2 bg-white p-4 rounded-lg border border-brand/20 shadow-sm">
-                  <label className="block text-sm font-bold text-brand mb-1 flex items-center gap-2"><ShieldCheck size={16}/> Refundable Caution Fee (₦)</label>
-                  <p className="text-xs text-gray-500 mb-3">This amount will be charged to the guest and held securely in Apartey Escrow. It is refunded if no damage is reported.</p>
-                  <input type="number" name="cautionFee" value={formData.cautionFee} onChange={handleInputChange} placeholder="e.g. 50000" className="w-full md:w-1/2 border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
-                </div>
-              </div>
-            </section>
-
-            {/* 2. Location */}
-            <section>
-              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><MapPin size={18} className="text-accent" /> Location</h3>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 bg-gray-50 p-6 rounded-xl border border-gray-100">
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">State</label>
-                  <input required type="text" name="state" value={formData.state} onChange={handleInputChange} placeholder="e.g. Lagos" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">City</label>
-                  <input required type="text" name="city" value={formData.city} onChange={handleInputChange} placeholder="e.g. Lekki" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-gray-700 mb-2">Area / Estate</label>
-                  <input required type="text" name="area" value={formData.area} onChange={handleInputChange} placeholder="e.g. Phase 1" className="w-full border border-gray-300 rounded-xl p-3 focus:ring-brand focus:border-brand transition-colors outline-none" />
-                </div>
-              </div>
-            </section>
-
-            {/* 3. Features & Amenities */}
-            <section>
-              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Star size={18} className="text-accent" /> Premium Amenities</h3>
-              <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-                {availableAmenities.map(amenity => (
-                  <label key={amenity} className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={selectedAmenities.includes(amenity)}
-                      onChange={(e) => {
-                        if (e.target.checked) setSelectedAmenities([...selectedAmenities, amenity]);
-                        else setSelectedAmenities(selectedAmenities.filter(a => a !== amenity));
-                      }}
-                      className="w-5 h-5 rounded border-gray-300 text-brand focus:ring-brand cursor-pointer"
-                    />
-                    <span className="text-sm font-medium text-gray-700 group-hover:text-brand transition-colors">{amenity}</span>
-                  </label>
-                ))}
-              </div>
-            </section>
-
-            {/* --- RESTORED: 4. House Rules --- */}
-            <section>
-              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><AlertCircle size={18} className="text-accent" /> House Rules</h3>
-              <div className="bg-gray-50 p-6 rounded-xl border border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-                {availableRules.map(rule => (
-                  <label key={rule} className="flex items-center gap-3 cursor-pointer group">
-                    <input
-                      type="checkbox"
-                      checked={selectedRules.includes(rule)}
-                      onChange={(e) => {
-                        if (e.target.checked) setSelectedRules([...selectedRules, rule]);
-                        else setSelectedRules(selectedRules.filter(r => r !== rule));
-                      }}
-                      className="w-5 h-5 rounded border-gray-300 text-brand focus:ring-brand cursor-pointer"
-                    />
-                    <span className="text-sm font-medium text-gray-700 group-hover:text-brand transition-colors">{rule}</span>
-                  </label>
-                ))}
-              </div>
-            </section>
-
-            {/* 5. PREMIUM ADD-ONS (SOFT LIFE) */}
-            <section>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                  <ConciergeBell size={18} className="text-accent" /> Premium Add-Ons (Soft Life)
-                </h3>
-              </div>
-              <div className="bg-brand/5 p-6 rounded-xl border border-brand/10">
-                <p className="text-sm text-gray-600 mb-4">Offer luxury extras like a Private Chef, Airport Pickup, or PS5 Rental. You keep 100% of these earnings.</p>
-                
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                  <div className="md:col-span-1">
-                    <input 
-                      type="text" 
-                      placeholder="Service Name (e.g. PS5)" 
-                      value={newAddOn.name} 
-                      onChange={(e) => setNewAddOn({...newAddOn, name: e.target.value})} 
-                      className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-brand outline-none" 
-                    />
+  const renderBookings = () => (
+    <div className="animate-fade-in">
+      <PageHead
+        eyebrow="Bookings"
+        title="Requests & stays"
+        lead="Accept paid requests to send guests their check-in code."
+        action={
+          <button onClick={handleRefreshBookings} disabled={fetchingBookings} className="btn-outline btn-sm">
+            <RefreshCw size={14} className={fetchingBookings ? 'animate-spin' : ''} /> Refresh
+          </button>
+        }
+      />
+      {fetchingBookings ? (
+        <BrandLoader />
+      ) : bookings.length === 0 ? (
+        <EmptyState icon={ClipboardList} title="No bookings yet">When guests book one of your places, it’ll appear here.</EmptyState>
+      ) : (
+        <div className="space-y-3">
+          {bookings.map((booking) => {
+            const isExpanded = expandedBookingId === booking.id;
+            const bookingAddOns = parseAddOns(booking.addOns);
+            return (
+              <div key={booking.id} className="card p-5">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <StatusBadge status={booking.status} />
+                      <span className="font-mono text-[11px] text-faint">{formatDay(booking.checkIn)} → {formatDay(booking.checkOut)}</span>
+                    </div>
+                    <p className="truncate font-medium">{booking.propertyTitle}</p>
+                    <p className="mt-0.5 text-sm text-muted">
+                      {booking.guestName || 'Guest'} · your payout <span className="mono text-ink">{naira(hostPayout(booking))}</span>
+                    </p>
                   </div>
-                  <div className="md:col-span-2">
-                    <input 
-                      type="text" 
-                      placeholder="Short description..." 
-                      value={newAddOn.description} 
-                      onChange={(e) => setNewAddOn({...newAddOn, description: e.target.value})} 
-                      className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-brand outline-none" 
-                    />
-                  </div>
-                  <div className="md:col-span-1 flex gap-2">
-                    <input 
-                      type="number" 
-                      placeholder="Price (₦)" 
-                      value={newAddOn.price} 
-                      onChange={(e) => setNewAddOn({...newAddOn, price: e.target.value})} 
-                      className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-brand outline-none" 
-                    />
-                    <button 
-                      type="button" 
-                      onClick={handleAddAddOn} 
-                      className="bg-brand text-white px-4 rounded-lg font-bold hover:bg-gray-800 transition-colors shadow-sm"
-                    >
-                      Add
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setExpandedBookingId(isExpanded ? null : booking.id)} className="btn-ghost btn-sm">
+                      {isExpanded ? 'Hide details' : 'Details'}
                     </button>
+                    {(booking.status === 'paid' || booking.status === 'split_pending') && (
+                      <button onClick={() => handleRejectBooking(booking.id)} className="btn-danger btn-sm">Decline</button>
+                    )}
+                    {booking.status === 'paid' && (
+                      <button onClick={() => handleAcceptBooking(booking.id)} className="btn-ink btn-sm"><Check size={14} /> Accept</button>
+                    )}
                   </div>
                 </div>
 
-                {addOns.length > 0 && (
-                  <div className="space-y-2 mt-6 pt-4 border-t border-brand/10">
-                    {addOns.map((addon) => (
-                      <div key={addon.id} className="flex justify-between items-center bg-white p-3 rounded-lg shadow-sm border border-gray-100">
-                        <div>
-                          <p className="font-bold text-brand text-sm">{addon.name} <span className="text-accent ml-2">₦{addon.price.toLocaleString()}</span></p>
-                          <p className="text-xs text-gray-500">{addon.description}</p>
-                        </div>
-                        <button 
-                          type="button" 
-                          onClick={() => removeAddOn(addon.id)} 
-                          className="text-red-500 hover:bg-red-50 p-1.5 rounded-md transition-colors"
-                        >
-                          <X size={16}/>
-                        </button>
-                      </div>
-                    ))}
+                {booking.status === 'confirmed' && booking.checkInCode && (
+                  <div className="mt-4 inline-flex items-center gap-3 rounded-lg bg-ink px-3 py-2 text-cream">
+                    <KeyRound size={14} className="text-lime" />
+                    <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-cream/70">Check-in code</span>
+                    <span className="mono tracking-[0.2em] text-lime">{booking.checkInCode}</span>
+                  </div>
+                )}
+
+                {isExpanded && (
+                  <div className="mt-5 grid gap-3 border-t border-line pt-5 md:grid-cols-2 animate-fade-in">
+                    <div className="inset p-4 text-sm">
+                      <p className="eyebrow mb-3 text-faint">Guest</p>
+                      <p className="font-medium">{booking.guestName || 'Guest'}</p>
+                      {booking.guestPhone && <p className="mono mt-1 text-muted">{booking.guestPhone}</p>}
+                      <p className="mt-1 text-muted">{nightsBetween(booking.checkIn, booking.checkOut)} nights · guest paid <span className="mono text-ink">{naira(booking.totalPrice)}</span></p>
+                    </div>
+                    <div className="inset p-4 text-sm">
+                      <p className="eyebrow mb-3 text-faint">Add-ons</p>
+                      {bookingAddOns.length > 0 ? (
+                        <ul className="space-y-1.5">
+                          {bookingAddOns.map((a, idx) => (
+                            <li key={a.id ?? idx} className="flex justify-between"><span>{a.name || a.title}</span><span className="mono">{naira(a.price)}</span></li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-muted">No add-ons on this booking.</p>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
-            </section>
-
-            {/* 6. Photos */}
-            <section>
-              <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2"><Upload size={18} className="text-accent" /> Property Photos</h3>
-              <div className="border-2 border-dashed border-gray-300 rounded-2xl p-10 text-center hover:bg-gray-50 transition-colors bg-white">
-                <input type="file" multiple accept="image/*" onChange={(e) => setSelectedImages(Array.from(e.target.files))} className="hidden" id="property-images" />
-                <label htmlFor="property-images" className="cursor-pointer flex flex-col items-center">
-                  <div className="bg-brand/5 p-4 rounded-full mb-4">
-                    <Upload size={32} className="text-brand" />
-                  </div>
-                  <span className="text-base font-bold text-brand">{selectedImages.length > 0 ? `${selectedImages.length} highly curated images selected` : 'Click to browse images'}</span>
-                  <span className="text-sm text-gray-500 mt-2">Upload high-quality JPEGs or PNGs</span>
-                </label>
-              </div>
-            </section>
-
-            {/* Actions */}
-            <div className="pt-6 border-t border-gray-200 flex justify-end gap-4">
-              <button type="button" onClick={() => setIsAddingListing(false)} className="px-6 py-3 rounded-xl font-bold text-gray-600 hover:bg-gray-100 transition-colors">Cancel</button>
-              <button type="submit" disabled={loading} className="bg-brand hover:bg-gray-900 text-white px-10 py-3 rounded-xl font-bold transition-colors shadow-lg flex items-center gap-2 disabled:opacity-70 text-lg">
-                {loading ? <RefreshCw size={20} className="animate-spin" /> : <Check size={20} />}
-                {loading ? 'Publishing...' : 'Publish Listing'}
-              </button>
-            </div>
-            
-          </form>
+            );
+          })}
         </div>
       )}
     </div>
   );
 
-// ... (Rest of your component logic stays exactly the same)
-  const renderBookings = () => (
-     <div className="animate-fade-in space-y-6">
-        <div className="flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-6">
-          <div>
-            <h2 className="text-2xl font-bold text-brand">Booking Operations</h2>
-            <p className="text-gray-500 text-sm">Review guests, requested services, and manage reservations.</p>
-          </div>
-          <button 
-            onClick={handleRefreshBookings}
-            disabled={fetchingBookings}
-            className="bg-brand/10 text-brand hover:bg-brand hover:text-white px-4 py-2 rounded-lg font-bold text-sm transition-colors flex items-center justify-center gap-2"
-          >
-            <RefreshCw size={16} className={fetchingBookings ? "animate-spin" : ""} />
-            Sync Bookings
-          </button>
-        </div>
-        
-        {fetchingBookings ? (
-          <BrandLoader />
-        ) : bookings.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-xl p-12 text-center shadow-sm">
-            <ClipboardList size={48} className="mx-auto text-gray-300 mb-4" />
-            <h3 className="text-lg font-bold text-gray-700 mb-2">No Bookings Yet</h3>
-          </div>
-        ) : (
-           <div className="space-y-6">
-             {bookings.map((booking) => {
-               const isExpanded = expandedBookingId === booking.id;
-               const selectedAddOns = parseAddOns(booking.addOns);
-
-               return (
-                <div key={booking.id} className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm flex flex-col transition-all">
-                   <div className="flex flex-col lg:flex-row gap-6 justify-between items-start lg:items-center">
-                     <div className="flex-1">
-                        <h3 className="font-black text-xl text-brand">{booking.propertyTitle}</h3>
-                        <p className="mt-1 text-sm text-gray-600 font-medium">Total Payout: <span className="text-green-600 font-bold">₦{(booking.totalPrice / 1.05).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></p>
-                        
-                        {booking.status === 'confirmed' && (
-                          <div className="mt-2 inline-block bg-green-50 text-green-700 font-bold px-3 py-1 rounded-md border border-green-200">
-                            Check-In Code: {booking.checkInCode}
-                          </div>
-                        )}
-                     </div>
-
-                     <div className="flex flex-wrap gap-3">
-                        <button 
-                          onClick={() => setExpandedBookingId(isExpanded ? null : booking.id)} 
-                          className="bg-gray-100 text-gray-700 hover:bg-gray-200 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors"
-                        >
-                          <ConciergeBell size={16} />
-                          {isExpanded ? 'Hide Details' : 'View Details'}
-                        </button>
-
-                        {booking.status === 'paid' && (
-                          <button onClick={() => handleAcceptBooking(booking.id)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors shadow-sm">
-                            Accept Booking
-                          </button>
-                        )}
-                     </div>
-                   </div>
-
-                   {isExpanded && (
-                     <div className="mt-6 pt-6 border-t border-gray-100 animate-fade-in">
-                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                         
-                         <div className="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                           <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Guest Information</h4>
-                           <p className="font-bold text-gray-800">{booking.guestName || 'Apartey Guest'}</p>
-                           <p className="text-sm text-gray-600 mt-1">
-                             Dates: {new Date(booking.checkIn).toLocaleDateString()} to {new Date(booking.checkOut).toLocaleDateString()}
-                           </p>
-                           {booking.guestPhone && (
-                             <p className="text-sm text-gray-600 mt-1">Phone: {booking.guestPhone}</p>
-                           )}
-                         </div>
-
-                         <div className="bg-brand/5 p-4 rounded-xl border border-brand/10">
-                           <h4 className="text-xs font-bold text-brand uppercase tracking-wider mb-3">Requested Add-ons</h4>
-                           {selectedAddOns.length > 0 ? (
-                             <ul className="space-y-2">
-                               {selectedAddOns.map((addon, idx) => (
-                                 <li key={idx} className="flex justify-between items-center text-sm font-medium text-gray-800 bg-white p-2 rounded-lg shadow-sm border border-gray-100">
-                                   <span>{addon.name || addon.title}</span>
-                                   <span className="text-brand font-bold">₦{(addon.price).toLocaleString()}</span>
-                                 </li>
-                               ))}
-                             </ul>
-                           ) : (
-                             <p className="text-sm text-gray-500 italic">No premium add-ons selected for this stay.</p>
-                           )}
-                         </div>
-
-                       </div>
-                     </div>
-                   )}
-                </div>
-               );
-             })}
-           </div>
-        )}
-     </div>
-  );
-
   const renderEarnings = () => (
-     <div className="animate-fade-in space-y-6">
-      <div>
-        <h2 className="text-2xl font-bold text-brand">Earnings & Payouts</h2>
-        <p className="text-gray-500 text-sm">Manage your funds and withdraw directly to your Nigerian bank account.</p>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div className="bg-green-50 p-8 rounded-xl border border-green-200 shadow-sm flex flex-col justify-center items-center">
-          <p className="text-sm font-bold text-green-800 uppercase tracking-wider mb-2">Available Balance</p>
-          <h3 className="text-5xl font-extrabold text-green-700 mb-6">
-            ₦{wallet.balance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-          </h3>
-          <button className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-bold w-full max-w-xs">
-            Withdraw Funds
-          </button>
+    <div className="animate-fade-in">
+      <PageHead eyebrow="Earnings" title="Wallet & payouts" lead="Withdraw your balance to any major Nigerian bank." />
+      <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
+        <div className="flex flex-col justify-between rounded-2xl bg-night p-6 text-cream">
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-cream/60">Available balance</p>
+            <p className="mono mt-3 text-4xl">{fetchingWallet ? '—' : naira(wallet.balance)}</p>
+          </div>
+          <div className="mt-10">
+            <button onClick={() => setIsWithdrawModalOpen(true)} disabled={fetchingWallet || wallet.balance < 1000} className="btn-lime btn-lg w-full">
+              Withdraw funds <ArrowRight size={16} />
+            </button>
+            <p className="mt-2 text-center text-xs text-cream/50">Minimum withdrawal ₦1,000</p>
+          </div>
+        </div>
+
+        <div className="card card-pad">
+          <p className="eyebrow mb-4">Recent transactions</p>
+          {(wallet.transactions || []).length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted">No transactions yet. Earnings appear here when guests pay.</p>
+          ) : (
+            <ul className="divide-y divide-line">
+              {wallet.transactions.map((t) => {
+                const credit = t.type === 'Credit';
+                return (
+                  <li key={t.id} className="flex items-center justify-between gap-4 py-3 text-sm">
+                    <div className="min-w-0">
+                      <p className="truncate">{t.description}</p>
+                      <p className="font-mono text-[11px] text-faint">{formatDay(t.date)} · {t.type}</p>
+                    </div>
+                    <span className={`mono shrink-0 ${credit ? 'text-emerald-700' : 'text-ink'}`}>{credit ? '+' : '−'}{naira(t.amount)}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
         </div>
       </div>
+
+      <Modal open={isWithdrawModalOpen} onClose={() => setIsWithdrawModalOpen(false)} title="Withdraw">
+        <form onSubmit={handleWithdraw} className="space-y-4 p-6">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-light tracking-[-0.02em]">Withdraw to your bank</h3>
+            <button type="button" onClick={() => setIsWithdrawModalOpen(false)} className="btn-ghost btn-sm -mr-2" aria-label="Close"><X size={16} /></button>
+          </div>
+          <div className="inset flex justify-between px-4 py-3 text-sm"><span className="text-muted">Available</span><span className="mono">{naira(wallet.balance)}</span></div>
+          <div>
+            <label className="label" htmlFor="wd-amount">Amount (₦)</label>
+            <input id="wd-amount" type="number" min="1000" max={wallet.balance} step="1" required value={withdrawData.amount}
+              onChange={(e) => setWithdrawData({ ...withdrawData, amount: e.target.value })} className="input mono" />
+          </div>
+          <div>
+            <label className="label" htmlFor="wd-bank">Bank</label>
+            <select id="wd-bank" value={withdrawData.bankCode} onChange={(e) => setWithdrawData({ ...withdrawData, bankCode: e.target.value })} className="input">
+              <option value="044">Access Bank</option>
+              <option value="214">FCMB</option>
+              <option value="070">Fidelity Bank</option>
+              <option value="011">First Bank</option>
+              <option value="058">GTBank</option>
+              <option value="50211">Kuda Bank</option>
+              <option value="232">Sterling Bank</option>
+              <option value="033">UBA</option>
+              <option value="035">Wema Bank</option>
+              <option value="057">Zenith Bank</option>
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="wd-acct">Account number</label>
+            <input id="wd-acct" type="text" inputMode="numeric" pattern="\d{10}" maxLength={10} required value={withdrawData.accountNumber}
+              onChange={(e) => setWithdrawData({ ...withdrawData, accountNumber: e.target.value.replace(/\D/g, '') })} className="input mono tracking-wider" placeholder="0123456789" />
+          </div>
+          <button type="submit" disabled={isWithdrawing} className="btn-ink btn-lg w-full">{isWithdrawing ? 'Processing…' : 'Confirm withdrawal'}</button>
+        </form>
+      </Modal>
     </div>
   );
 
   const renderVerification = () => (
-    <div className="animate-fade-in space-y-6 max-w-3xl">
-      <div>
-        <h2 className="text-2xl font-bold text-brand">Trust & Verification</h2>
-        <p className="text-gray-500 text-sm">Become a Premium Host to unlock unlimited listings and higher visibility.</p>
-      </div>
-
-      {fetchingVerification ? (
-         <BrandLoader />
-      ) : verificationData.status === 'Verified' ? (
-         <div className="bg-green-50 border border-green-200 rounded-xl p-8 text-center shadow-sm">
-           <ShieldCheck size={48} className="mx-auto text-green-500 mb-4" />
-           <h3 className="text-xl font-bold text-green-800 mb-2">Premium Host Active</h3>
-           <p className="text-green-700 mb-4">You are a verified Premium Host. Your properties receive boosted visibility!</p>
-         </div>
+    <div className="max-w-2xl animate-fade-in">
+      <PageHead eyebrow="Verification" title="Become a verified host" lead="Verified hosts get unlimited listings and a badge guests see on every listing." />
+      {fetchingVerification && !verificationData.status ? (
+        <BrandLoader />
+      ) : isVerified ? (
+        <div className="card flex items-center gap-4 p-6">
+          <span className="grid h-11 w-11 place-items-center rounded-full bg-lime"><BadgeCheck size={20} /></span>
+          <div>
+            <p className="font-medium">You’re verified</p>
+            <p className="text-sm text-muted">Your listings show the Verified badge, and you can list as many places as you like.</p>
+          </div>
+        </div>
       ) : verificationData.status === 'Pending' ? (
-         <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-8 text-center shadow-sm">
-           <AlertCircle size={48} className="mx-auto text-yellow-500 mb-4" />
-           <h3 className="text-xl font-bold text-yellow-800 mb-2">Verification in Progress</h3>
-           <p className="text-yellow-700">Our team is reviewing your documents. This usually takes 24-48 hours.</p>
-         </div>
+        <div className="card flex items-center gap-4 p-6">
+          <span className="grid h-11 w-11 place-items-center rounded-full bg-amber-100"><Clock size={20} className="text-amber-700" /></span>
+          <div>
+            <p className="font-medium">Review in progress</p>
+            <p className="text-sm text-muted">We’re checking your document. This usually takes 24–48 hours.</p>
+          </div>
+        </div>
       ) : (
-         <div className="bg-white border border-gray-200 rounded-xl p-6 md:p-8 shadow-sm">
-           <div className="mb-6 pb-6 border-b border-gray-100">
-             <h3 className="text-lg font-bold text-brand mb-2">Upgrade to Premium Host</h3>
-             <p className="text-sm text-gray-600 mb-4">Standard hosts can list up to <strong>2 properties for free</strong>. Verify your identity to unlock unlimited listings and priority search placement.</p>
-             <div className="bg-brand/5 p-4 rounded-xl border border-brand/10">
-               <h4 className="font-bold text-brand text-sm mb-2 flex items-center gap-2">
-                 <Star size={16} className="text-accent" /> Premium Benefits & Terms:
-               </h4>
-               <ul className="text-sm text-gray-700 space-y-2 list-disc pl-5 mt-3">
-                 <li><strong>Unlimited</strong> property listings.</li>
-                 <li>"Verified Host" badge on your profile and properties.</li>
-                 <li>Priority placement in guest search results.</li>
-                 <li><strong>Platform Fee:</strong> By upgrading, you agree to a standard <strong>5% platform fee</strong> deducted from successful bookings.</li>
-               </ul>
-             </div>
-           </div>
-
-           <form onSubmit={handleKycSubmit} className="space-y-6">
-             <div>
-               <label className="block text-sm font-bold text-gray-700 mb-2">Select Document Type</label>
-               <select
-                 value={kycDocType}
-                 onChange={(e) => setKycDocType(e.target.value)}
-                 className="w-full border border-gray-300 rounded-lg p-3 bg-gray-50 focus:ring-brand focus:border-brand transition-colors"
-               >
-                 <option value="NIN">National Identity Number (NIN) Slip</option>
-                 <option value="Passport">International Passport</option>
-                 <option value="VotersCard">Voter's Card (INEC)</option>
-               </select>
-             </div>
-
-             <div>
-               <label className="block text-sm font-bold text-gray-700 mb-2">Upload Document</label>
-               <div className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:bg-gray-50 transition-colors">
-                 <input
-                   type="file"
-                   accept="image/*,.pdf"
-                   onChange={(e) => setKycFile(e.target.files[0])}
-                   className="hidden"
-                   id="kyc-upload"
-                 />
-                 <label htmlFor="kyc-upload" className="cursor-pointer flex flex-col items-center">
-                   <Upload size={32} className="text-gray-400 mb-3" />
-                   <span className="text-sm font-bold text-brand">{kycFile ? kycFile.name : 'Click to browse or drag and drop'}</span>
-                   <span className="text-xs text-gray-500 mt-2">PNG, JPG, or PDF (Max 5MB)</span>
-                 </label>
-               </div>
-             </div>
-
-             <div className="flex items-start gap-3 mt-6 bg-gray-50 p-4 rounded-lg border border-gray-200">
-               <input
-                 type="checkbox"
-                 id="terms"
-                 checked={kycAcceptedTerms}
-                 onChange={(e) => setKycAcceptedTerms(e.target.checked)}
-                 className="mt-1 w-5 h-5 text-brand rounded border-gray-300 focus:ring-brand"
-               />
-               <label htmlFor="terms" className="text-sm text-gray-700 leading-relaxed">
-                 I confirm that the uploaded document is authentic and belongs to me. I have read and agree to the <span className="text-brand font-bold">Premium Host Terms & Conditions</span>, including the 5% platform fee per booking.
-               </label>
-             </div>
-
-             <button
-               type="submit"
-               disabled={!kycFile || !kycAcceptedTerms || uploadingKyc}
-               className="w-full bg-brand hover:bg-gray-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all shadow-md mt-4 text-lg"
-             >
-               {uploadingKyc ? 'Submitting...' : 'Submit Verification Request'}
-             </button>
-           </form>
-         </div>
+        <form onSubmit={handleKycSubmit} className="card card-pad space-y-5">
+          <ul className="inset space-y-2 p-4 text-sm">
+            {['Unlimited listings (standard hosts can list 2)', 'Verified badge on your profile and listings', 'Standard 5% platform fee on bookings'].map((t) => (
+              <li key={t} className="flex items-center gap-2"><Check size={14} className="text-lime-deep" /> {t}</li>
+            ))}
+          </ul>
+          <div>
+            <label className="label" htmlFor="kyc-type">Document type</label>
+            <select id="kyc-type" value={kycDocType} onChange={(e) => setKycDocType(e.target.value)} className="input">
+              <option value="NIN">National Identity Number (NIN) slip</option>
+              <option value="Passport">International passport</option>
+              <option value="DriversLicense">Driver’s licence</option>
+              <option value="VotersCard">Voter’s card</option>
+            </select>
+          </div>
+          <div>
+            <span className="label">Document</span>
+            <input type="file" accept="image/*,.pdf" onChange={(e) => setKycFile(e.target.files[0])} className="sr-only" id="kyc-upload" />
+            <label htmlFor="kyc-upload" className="flex cursor-pointer flex-col items-center rounded-xl border border-dashed border-line bg-cream px-6 py-8 text-center transition-colors hover:bg-sand/60">
+              <Upload size={18} className="mb-2 text-muted" />
+              <span className="text-sm font-medium">{kycFile ? kycFile.name : 'Choose a file'}</span>
+              <span className="mt-1 text-xs text-faint">Photo or PDF, up to 10 MB</span>
+            </label>
+          </div>
+          <label className="flex items-start gap-3 text-sm text-muted">
+            <input type="checkbox" checked={kycAcceptedTerms} onChange={(e) => setKycAcceptedTerms(e.target.checked)} className="checkbox mt-0.5" />
+            I confirm this document is genuine and belongs to me, and I agree to the 5% platform fee on bookings.
+          </label>
+          <button type="submit" disabled={!kycFile || !kycAcceptedTerms || uploadingKyc} className="btn-ink btn-lg w-full">
+            {uploadingKyc ? 'Submitting…' : 'Submit for review'}
+          </button>
+        </form>
       )}
     </div>
   );
 
   return (
-    <div className="flex min-h-[calc(100vh-64px)] bg-gray-50">
-      <aside className="w-64 bg-white border-r border-gray-200 hidden md:block flex-shrink-0 sticky top-16 h-[calc(100vh-64px)] overflow-y-auto">
-        <div className="p-4">
-          <p className="text-xs font-extrabold text-gray-400 uppercase tracking-wider mb-4 ml-3">Host Controls</p>
-          <nav className="space-y-1">
-            {sidebarLinks.map((link) => (
+    <div className="page grid min-h-[calc(100vh-4rem)] grid-cols-1 gap-8 py-6 md:grid-cols-[200px_1fr] md:py-10">
+      {/* Sidebar (desktop) / tab strip (mobile) */}
+      <aside className="md:sticky md:top-24 md:self-start">
+        <p className="eyebrow mb-3 hidden text-faint md:block">Host</p>
+        <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-col md:px-0" aria-label="Dashboard">
+          {sidebarLinks.map((link) => {
+            const active = tab === link.id;
+            return (
               <button
                 key={link.id}
-                onClick={() => setActiveTab(link.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-                  activeTab === link.id 
-                    ? 'bg-brand/10 text-brand border-r-4 border-brand' 
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-brand'
-                }`}
+                onClick={() => { setActiveTab(link.id); setIsAddingListing(false); }}
+                aria-current={active ? 'page' : undefined}
+                className={`flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors ${active ? 'bg-ink text-cream' : 'text-muted hover:bg-paper hover:text-ink'}`}
               >
-                <link.icon size={18} className={activeTab === link.id ? 'text-brand' : 'text-gray-400'} />
+                <link.icon size={15} className={active ? 'text-lime' : ''} />
                 {link.label}
               </button>
-            ))}
-          </nav>
-        </div>
+            );
+          })}
+        </nav>
+        {isVerified && (
+          <p className="mt-6 hidden items-center gap-1.5 text-xs text-muted md:flex"><BadgeCheck size={14} className="text-lime-deep" /> Verified host</p>
+        )}
       </aside>
 
-      <main className="flex-1 p-6 lg:p-10 overflow-x-hidden">
-        {activeTab === 'overview' && renderOverview()}
-        {activeTab === 'listings' && renderListings()}
-        {activeTab === 'bookings' && renderBookings()}
-        {activeTab === 'earnings' && renderEarnings()}
-        {activeTab === 'verification' && renderVerification()}
-      </main>
+      <section className="min-w-0">
+        {tab === 'overview' && renderOverview()}
+        {tab === 'listings' && renderListings()}
+        {tab === 'bookings' && renderBookings()}
+        {tab === 'earnings' && renderEarnings()}
+        {tab === 'verification' && renderVerification()}
+      </section>
     </div>
   );
 }

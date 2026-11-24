@@ -1,15 +1,23 @@
 // Backend/Shortlet.Api/Hubs/ChatHub.cs
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
-using System.Threading.Tasks;
 
 namespace Shortlet.Api.Hubs
 {
+    /// <summary>
+    /// Each authenticated connection is put in a group named after its own user id, taken from the JWT.
+    /// Clients can no longer choose which room to join, so nobody can listen in on another user's messages.
+    /// Server code sends with Clients.Group(userId.ToString()).
+    /// </summary>
+    [Authorize]
     public class ChatHub : Hub
     {
-        // When a user logs into the React app, they join a secure private room using their User ID
-        public async Task JoinPrivateRoom(string userId)
+        public override async Task OnConnectedAsync()
         {
-            await Groups.AddToGroupAsync(Context.ConnectionId, userId);
+            if (!string.IsNullOrEmpty(Context.UserIdentifier))
+                await Groups.AddToGroupAsync(Context.ConnectionId, Context.UserIdentifier);
+
+            await base.OnConnectedAsync();
         }
     }
 }

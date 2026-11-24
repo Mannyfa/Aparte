@@ -1,81 +1,121 @@
-import React, { useContext } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useContext, useEffect, useState } from 'react';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { Menu, X, LogOut } from 'lucide-react';
 import { AuthContext } from '../context/AuthContext';
-import { LogOut, User, LayoutDashboard, ShieldAlert, Home } from 'lucide-react';
+import { Logo } from './ui';
+import { initials } from '../utils/format';
+
+const sectionLinks = [
+  { href: '/#stays', label: 'Stays' },
+  { href: '/#how', label: 'How it works' },
+  { href: '/#hosts', label: 'For hosts' },
+  { href: '/#faq', label: 'FAQ' },
+];
 
 export default function Navbar() {
   const { user, logout, isAuthenticated } = useContext(AuthContext);
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // The mobile menu closes itself when one of its links is tapped (see onClick below).
 
   const handleLogout = () => {
+    setOpen(false);
     logout();
     navigate('/');
   };
 
+  const role = user?.role;
+  const appLinks = isAuthenticated
+    ? [
+        ...(role === 'admin' ? [{ to: '/admin', label: 'Admin' }] : []),
+        ...(role === 'host' ? [{ to: '/dashboard', label: 'Dashboard' }] : [{ to: '/my-trips', label: 'My trips' }]),
+      ]
+    : [];
+
+  const navLinkClass = ({ isActive }) =>
+    `text-[13px] transition-colors ${isActive ? 'text-ink' : 'text-muted hover:text-ink'}`;
+
   return (
-    <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-md border-b border-gray-100 transition-all duration-300">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex justify-between items-center h-16">
-          
-          {/* Left: Premium Logo */}
-          <div className="flex items-center">
-            <Link to="/" className="flex items-center gap-2 group">
-              <div className="bg-brand text-white p-1.5 rounded-lg group-hover:bg-gray-800 transition-colors shadow-sm">
-                <Home size={20} />
-              </div>
-              <span className="font-display font-extrabold text-2xl tracking-tight text-brand">APARTEY</span>
+    <header
+      className={`sticky top-0 z-50 border-b transition-colors duration-200 ${
+        scrolled || open ? 'border-line bg-cream/85 backdrop-blur-md' : 'border-transparent bg-cream'
+      }`}
+    >
+      <div className="page flex h-16 items-center justify-between gap-6">
+        <Logo />
+
+        <nav className="hidden items-center gap-7 md:flex" aria-label="Main">
+          {sectionLinks.map((l) => (
+            <Link key={l.href} to={l.href} className="text-[13px] text-muted transition-colors hover:text-ink">
+              {l.label}
             </Link>
-          </div>
+          ))}
+          {appLinks.map((l) => (
+            <NavLink key={l.to} to={l.to} className={navLinkClass}>{l.label}</NavLink>
+          ))}
+        </nav>
 
-          {/* Right: Dynamic Navigation */}
-          <div className="flex items-center gap-6">
-            {isAuthenticated ? (
-              <>
-                {/* 1. Admin Link */}
-                {user?.role === 'admin' && (
-                  <Link to="/admin" className="text-sm font-bold text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg flex items-center gap-2 transition-colors border border-red-100">
-                    <ShieldAlert size={16} /> Command Center
-                  </Link>
-                )}
-                
-                {/* 2. Host Link */}
-                {user?.role === 'Host' && (
-                  <Link to="/dashboard" className="text-sm font-bold text-brand hover:bg-gray-50 px-3 py-2 rounded-lg flex items-center gap-2 transition-colors border border-gray-100">
-                    <LayoutDashboard size={16} /> Dashboard
-                  </Link>
-                )}
-
-                {/* 3. Universal Guest Link */}
-                <Link to="/my-trips" className="text-sm font-semibold text-gray-700 hover:text-brand transition-colors">
-                  My Trips
-                </Link>
-
-                {/* 4. User Profile & Logout */}
-                <div className="flex items-center gap-4 ml-2 pl-6 border-l border-gray-200">
-                  <div className="flex items-center gap-2 bg-gray-50/80 px-3 py-1.5 rounded-full border border-gray-200 shadow-sm backdrop-blur-sm">
-                    <User size={14} className="text-gray-500" />
-                    <span className="text-sm font-medium text-gray-700">{user?.name}</span>
-                  </div>
-                  <button 
-                    onClick={handleLogout}
-                    className="text-sm font-bold text-red-500 hover:text-red-700 flex items-center gap-1 transition-colors"
-                  >
-                    <LogOut size={16} /> Logout
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <Link to="/login" className="text-sm font-bold text-gray-700 hover:text-brand transition-colors">Log In</Link>
-                <Link to="/register" className="text-sm font-bold bg-brand text-white px-5 py-2.5 rounded-lg hover:bg-gray-800 transition-colors shadow-md">
-                  Sign Up
-                </Link>
-              </>
-            )}
-          </div>
-
+        <div className="hidden items-center gap-2 md:flex">
+          {isAuthenticated ? (
+            <>
+              <span className="flex items-center gap-2 rounded-full border border-line bg-paper py-1 pl-1 pr-3 text-[13px]">
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-lime font-mono text-[10px] text-ink">
+                  {initials(user?.name)}
+                </span>
+                <span className="max-w-[9rem] truncate">{user?.name}</span>
+              </span>
+              <button onClick={handleLogout} className="btn-ghost btn-sm" aria-label="Log out">
+                <LogOut size={14} /> Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" className="btn-ghost btn-sm">Log in</Link>
+              <Link to="/register" className="btn-lime btn-sm">Get started</Link>
+            </>
+          )}
         </div>
+
+        <button
+          className="grid h-9 w-9 place-items-center rounded-lg border border-line bg-paper md:hidden"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={open ? 'Close menu' : 'Open menu'}
+        >
+          {open ? <X size={18} /> : <Menu size={18} />}
+        </button>
       </div>
-    </nav>
+
+      {open && (
+        <div className="border-t border-line bg-cream md:hidden">
+          <nav className="page flex flex-col py-3" aria-label="Mobile">
+            {[...sectionLinks.map((l) => ({ to: l.href, label: l.label })), ...appLinks].map((l) => (
+              <Link key={l.to} to={l.to} onClick={() => setOpen(false)} className="border-b border-line/70 py-3 text-[15px] text-ink last:border-0">
+                {l.label}
+              </Link>
+            ))}
+            <div className="mt-4 flex gap-2 pb-2">
+              {isAuthenticated ? (
+                <button onClick={handleLogout} className="btn-outline flex-1"><LogOut size={14} /> Log out</button>
+              ) : (
+                <>
+                  <Link to="/login" onClick={() => setOpen(false)} className="btn-outline flex-1">Log in</Link>
+                  <Link to="/register" onClick={() => setOpen(false)} className="btn-lime flex-1">Get started</Link>
+                </>
+              )}
+            </div>
+          </nav>
+        </div>
+      )}
+    </header>
   );
 }

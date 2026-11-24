@@ -1,107 +1,109 @@
 // Backend/Shortlet.Api/Controllers/VerificationController.cs
-using System;
-using System.Security.Claims;
-using System.Threading.Tasks;
 using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
+using Shortlet.Api.Helpers;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
 {
+    /// <summary>
+    /// Swashbuckle can't describe a bare [FromForm] IFormFile parameter (it crashed /swagger),
+    /// so the upload is bound to this class instead.
+    /// </summary>
+    public class KycUploadRequest
+    {
+        public IFormFile? Document { get; set; }
+        public string DocumentType { get; set; } = string.Empty;
+    }
+
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
     public class VerificationController : ControllerBase
     {
-        private readonly AppDbContext _context;
-        private readonly Cloudinary _cloudinary;
+        private static readonly string[] AllowedDocumentTypes = { "NIN", "Passport", "DriversLicense", "VotersCard" };
+        private const long MaxDocumentBytes = 10 * 1024 * 1024;
 
-        public VerificationController(AppDbContext context, IConfiguration config)
+        private readonly AppDbContext _context;
+        private readonly Lazy<Cloudinary> _cloudinary;
+        private readonly ILogger<VerificationController> _logger;
+
+        public VerificationController(AppDbContext context, Lazy<Cloudinary> cloudinary, ILogger<VerificationController> logger)
         {
             _context = context;
-            
-            // This safely looks for your Cloudinary keys no matter how you named them in appsettings.json!
-            var account = new Account(
-                config["CloudinarySettings:CloudName"] ?? config["Cloudinary:CloudName"],
-                config["CloudinarySettings:ApiKey"] ?? config["Cloudinary:ApiKey"],
-                config["CloudinarySettings:ApiSecret"] ?? config["Cloudinary:ApiSecret"]
-            );
-            _cloudinary = new Cloudinary(account);
+            _cloudinary = cloudinary;
+            _logger = logger;
         }
-
-        
 
         [HttpGet("status")]
         public async Task<IActionResult> GetStatus()
         {
-            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrEmpty(userIdClaim)) return Unauthorized();
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
 
-            var userId = Guid.Parse(userIdClaim);
-            var user = await _context.Users.FindAsync(userId);
-            
-            return Ok(new { 
+            var user = await _context.Users.FindAsync(userId.Value);
+            return Ok(new
+            {
                 status = user?.VerificationStatus ?? "Unverified",
-                documentUrl = user?.IdDocumentUrl 
+                documentUrl = user?.IdDocumentUrl
             });
         }
 
         [HttpPost("upload")]
-        public async Task<IActionResult> UploadDocument([FromForm] IFormFile document, [FromForm] string documentType)
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> UploadDocument([FromForm] KycUploadRequest request)
         {
-            try
+            var document = request.Document;
+            if (document == null || document.Length == 0)
+                return BadRequest(new { message = "No valid ID document detected." });
+            if (document.Length > MaxDocumentBytes)
+                return BadRequest(new { message = "Document must be under 10 MB." });
+
+            var contentType = document.ContentType ?? "";
+            if (!contentType.StartsWith("image/") && contentType != "application/pdf")
+                return BadRequest(new { message = "Upload an image or a PDF." });
+
+            var documentType = AllowedDocumentTypes.FirstOrDefault(t => string.Equals(t, request.DocumentType, StringComparison.OrdinalIgnoreCase))
+                ?? request.DocumentType?.Trim();
+            if (string.IsNullOrEmpty(documentType)) return BadRequest(new { message = "Choose a document type." });
+
+            var userId = User.GetUserId();
+            if (userId == null) return Unauthorized();
+            var user = await _context.Users.FindAsync(userId.Value);
+            if (user == null) return NotFound(new { message = "User not found." });
+            if (user.VerificationStatus == "Verified") return BadRequest(new { message = "You are already verified." });
+
+            Cloudinary cloudinary;
+            try { cloudinary = _cloudinary.Value; }
+            catch (InvalidOperationException ex)
             {
-                if (document == null || document.Length == 0)
-                    return BadRequest(new { message = "No valid ID document detected." });
-
-                var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
-                if (string.IsNullOrEmpty(userIdClaim)) return Unauthorized();
-
-                var userId = Guid.Parse(userIdClaim);
-                var user = await _context.Users.FindAsync(userId);
-
-                if (user == null) return NotFound("User not found.");
-
-               
-               
-                using var stream = document.OpenReadStream();
-                
-                
-                var uploadParams = new RawUploadParams
-                {
-                    File = new FileDescription(document.FileName, stream),
-                    Folder = "shortlet_kyc_documents"
-                };
-
-                var uploadResult = await _cloudinary.UploadAsync(uploadParams);
-
-                if (uploadResult.Error != null)
-                    return BadRequest(new { message = uploadResult.Error.Message });
-
-                
-                user.IdDocumentUrl = uploadResult.SecureUrl.ToString();
-                
-                
-                user.IdDocumentType = documentType; 
-                
-                
-                user.VerificationStatus = "Pending"; 
-
-                await _context.SaveChangesAsync();
-
-                return Ok(new { 
-                    message = "Verification request submitted successfully! Our team is reviewing it.", 
-                    status = user.VerificationStatus 
-                });
+                _logger.LogError(ex, "Cloudinary not configured");
+                return StatusCode(500, new { message = "Document uploads are not configured on the server." });
             }
-            catch (Exception ex)
+
+            await using var stream = document.OpenReadStream();
+            var uploadResult = await cloudinary.UploadAsync(new RawUploadParams
             {
-                return StatusCode(500, new { message = "Error processing document.", error = ex.Message });
-            }
+                File = new FileDescription(document.FileName, stream),
+                Folder = "shortlet_kyc_documents"
+            });
+
+            if (uploadResult.Error != null)
+                return BadRequest(new { message = uploadResult.Error.Message });
+
+            user.IdDocumentUrl = uploadResult.SecureUrl.ToString();
+            user.IdDocumentType = documentType;
+            user.VerificationStatus = "Pending";
+            await _context.SaveChangesAsync();
+
+            return Ok(new
+            {
+                message = "Verification request submitted successfully! Our team is reviewing it.",
+                status = user.VerificationStatus,
+                documentUrl = user.IdDocumentUrl
+            });
         }
     }
 }

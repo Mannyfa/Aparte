@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Shortlet.Api.Helpers;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
@@ -66,18 +67,18 @@ namespace Shortlet.Api.Controllers
                 if (totalProperties > 0)
                 {
                     var activeProperties = await _context.Bookings
-                        .Where(b => b.Property.HostId == hostId && b.CheckIn <= now && b.CheckOut >= now && b.Status == "confirmed")
+                        .Where(b => b.Property.HostId == hostId && b.CheckIn <= now && b.CheckOut > now && (b.Status == "confirmed" || b.Status == "paid"))
                         .Select(b => b.PropertyId)
                         .Distinct()
                         .CountAsync();
                     
-                    occupancyRate = (int)(((double)activeProperties / totalProperties) * 100) + (activeProperties == 0 ? 12 : 0);
+                    occupancyRate = (int)(((double)activeProperties / totalProperties) * 100);
                 }
 
                 // 6. Fetch 4 Most Recent Booking Requests
                 var recentRequests = await _context.Bookings
                     .Include(b => b.Property)
-                    .Where(b => b.Property.HostId == hostId)
+                    .Where(b => b.Property.HostId == hostId && b.Status != "failed")
                     .OrderByDescending(b => b.CheckIn)
                     .Take(4)
                     .Select(b => new {
@@ -86,8 +87,8 @@ namespace Shortlet.Api.Controllers
                         checkIn = b.CheckIn,
                         checkOut = b.CheckOut,
                         status = b.Status,
-                        guestInitials = "G", 
-                        guestName = "Guest User" 
+                        guestInitials = b.Guest.Name.Substring(0, 1).ToUpper(),
+                        guestName = b.Guest.Name
                     })
                     .ToListAsync();
 
@@ -99,7 +100,7 @@ namespace Shortlet.Api.Controllers
                     earningsThisMonth,
                     upcomingBookingsCount,
                     occupancyRate,
-                    listingViews = totalProperties * 342, 
+                    listingViews = (int?)null, // view tracking not implemented yet
                     recentRequests
                 });
             }

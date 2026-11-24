@@ -1,10 +1,7 @@
 // Backend/Shortlet.Infrastructure/Services/PaystackService.cs
-using System;
-using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
 using Shortlet.Core.Interfaces;
 
@@ -12,38 +9,65 @@ namespace Shortlet.Infrastructure.Services
 {
     public class PaystackService : IPaystackService
     {
+        private const string BaseUrl = "https://api.paystack.co";
         private readonly HttpClient _httpClient;
-        private readonly string _secretKey;
+        private readonly string? _secretKey;
 
         public PaystackService(HttpClient httpClient, IConfiguration config)
         {
             _httpClient = httpClient;
-            _secretKey = config["Paystack:SecretKey"] ?? throw new Exception("Paystack key missing");
+            _secretKey = config["Paystack:SecretKey"];
         }
 
-        public async Task<string> InitializePaymentAsync(decimal amount, string reference, string email)
+        private HttpRequestMessage NewRequest(string path, object payload)
         {
-            // Paystack expects amount in Kobo (multiply Naira by 100)
+            if (string.IsNullOrEmpty(_secretKey))
+                throw new InvalidOperationException("Paystack:SecretKey is not configured.");
+
+            var request = new HttpRequestMessage(HttpMethod.Post, BaseUrl + path)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json")
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secretKey);
+            return request;
+        }
+
+        public async Task<string> InitializePaymentAsync(decimal amount, string reference, string email, string callbackUrl)
+        {
             var payload = new
             {
-                email = email,
-                amount = (long)(amount * 100), 
-                reference = reference,
-                callback_url = "http://localhost:5174/payment-success" // We will build this React page later
+                email,
+                amount = (long)Math.Round(amount * 100, MidpointRounding.AwayFromZero), // Naira -> Kobo
+                reference,
+                callback_url = callbackUrl
             };
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://api.paystack.co/transaction/initialize");
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secretKey);
-            request.Content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
+            using var response = await _httpClient.SendAsync(NewRequest("/transaction/initialize", payload));
+            var body = await response.Content.ReadAsStringAsync();
+            using var json = JsonDocument.Parse(body);
 
-            var response = await _httpClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var message = json.RootElement.TryGetProperty("message", out var m) ? m.GetString() : response.ReasonPhrase;
+                throw new InvalidOperationException($"Paystack rejected the payment: {message}");
+            }
 
-            var responseBody = await response.Content.ReadAsStringAsync();
-            var json = JsonDocument.Parse(responseBody);
-            
-            // Extract the checkout URL so we can redirect the user
             return json.RootElement.GetProperty("data").GetProperty("authorization_url").GetString()!;
+        }
+
+        public async Task<(bool Success, string Message)> RefundAsync(string transactionReference)
+        {
+            using var response = await _httpClient.SendAsync(NewRequest("/refund", new { transaction = transactionReference }));
+            var body = await response.Content.ReadAsStringAsync();
+            string message = response.ReasonPhrase ?? "";
+            try
+            {
+                using var json = JsonDocument.Parse(body);
+                if (json.RootElement.TryGetProperty("message", out var m)) message = m.GetString() ?? message;
+            }
+            catch (JsonException) { /* non-JSON error body */ }
+
+            return (response.IsSuccessStatusCode, message);
         }
     }
 }

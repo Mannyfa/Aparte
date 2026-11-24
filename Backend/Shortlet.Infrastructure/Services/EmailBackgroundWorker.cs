@@ -1,54 +1,76 @@
 // Backend/Shortlet.Infrastructure/Services/EmailBackgroundWorker.cs
-using System;
-using System.Threading;
-using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Shortlet.Core.Interfaces;
 
 namespace Shortlet.Infrastructure.Services
 {
+    /// <summary>
+    /// Sends queued emails in the background so API requests and webhooks return immediately.
+    /// (Previously this only logged "SUCCESS" without sending anything.)
+    /// </summary>
     public class EmailBackgroundWorker : BackgroundService
     {
+        private const int MaxAttempts = 3;
+
         private readonly IEmailQueue _emailQueue;
+        private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<EmailBackgroundWorker> _logger;
 
-        public EmailBackgroundWorker(IEmailQueue emailQueue, ILogger<EmailBackgroundWorker> logger)
+        public EmailBackgroundWorker(IEmailQueue emailQueue, IServiceScopeFactory scopeFactory, ILogger<EmailBackgroundWorker> logger)
         {
             _emailQueue = emailQueue;
+            _scopeFactory = scopeFactory;
             _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("🟢 Background Email Worker is starting.");
+            _logger.LogInformation("Background email worker started.");
 
             while (!stoppingToken.IsCancellationRequested)
             {
+                EmailMessagePayload payload;
                 try
                 {
-                    // This waits quietly until an email is dropped into the queue
-                    var emailPayload = await _emailQueue.DequeueEmailAsync(stoppingToken);
-
-                    _logger.LogInformation($"📧 Preparing to send email to {emailPayload.ToEmail}...");
-
-                    // Simulated 2-second delay
-                    await Task.Delay(2000, stoppingToken); 
-
-                    _logger.LogInformation($"✅ SUCCESS: Email sent to {emailPayload.ToEmail}! Subject: {emailPayload.Subject}");
+                    payload = await _emailQueue.DequeueEmailAsync(stoppingToken);
                 }
                 catch (OperationCanceledException)
                 {
-                    // Catch the expected shutdown signal and exit peacefully!
-                    _logger.LogInformation("🛑 Background Email Worker is shutting down gracefully.");
-                    break; 
+                    break;
                 }
-                catch (Exception ex)
+
+                using var scope = _scopeFactory.CreateScope();
+                var emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
+
+                if (!emailService.IsConfigured)
                 {
-                    // Only log ACTUAL unexpected errors
-                    _logger.LogError(ex, "🔴 Error occurred executing the email background task.");
+                    _logger.LogWarning("SMTP not configured; email to {To} ('{Subject}') was not sent.", payload.ToEmail, payload.Subject);
+                    continue;
+                }
+
+                for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+                {
+                    try
+                    {
+                        await emailService.SendEmailAsync(payload.ToEmail, payload.Subject, payload.Body, stoppingToken);
+                        _logger.LogInformation("Email sent to {To}: {Subject}", payload.ToEmail, payload.Subject);
+                        break;
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Sending email to {To} failed (attempt {Attempt}/{Max}).", payload.ToEmail, attempt, MaxAttempts);
+                        if (attempt < MaxAttempts) await Task.Delay(TimeSpan.FromSeconds(5 * attempt), stoppingToken);
+                    }
                 }
             }
+
+            _logger.LogInformation("Background email worker stopped.");
         }
     }
 }

@@ -1,6 +1,4 @@
 // Backend/Shortlet.Api/Controllers/AuthController.cs
-using System;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Shortlet.Core.DTOs;
 using Shortlet.Core.Interfaces;
@@ -12,10 +10,12 @@ namespace Shortlet.Api.Controllers
     public class AuthController : ControllerBase
     {
         private readonly IAuthService _authService;
+        private readonly ILogger<AuthController> _logger;
 
-        public AuthController(IAuthService authService)
+        public AuthController(IAuthService authService, ILogger<AuthController> logger)
         {
             _authService = authService;
+            _logger = logger;
         }
 
         [HttpPost("register")]
@@ -23,12 +23,16 @@ namespace Shortlet.Api.Controllers
         {
             try
             {
-                var result = await _authService.RegisterAsync(request);
-                return Ok(result);
+                return Ok(await _authService.RegisterAsync(request));
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                return BadRequest(new { message = ex.Message });
+                _logger.LogError(ex, "Registration failed");
+                return StatusCode(500, new { message = "Registration failed. Please try again." });
             }
         }
 
@@ -37,12 +41,16 @@ namespace Shortlet.Api.Controllers
         {
             try
             {
-                var result = await _authService.LoginAsync(request);
-                return Ok(result);
+                return Ok(await _authService.LoginAsync(request));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
             }
             catch (Exception ex)
             {
-                return Unauthorized(new { message = ex.Message });
+                _logger.LogError(ex, "Login failed");
+                return StatusCode(500, new { message = "Login failed. Please try again." });
             }
         }
     }

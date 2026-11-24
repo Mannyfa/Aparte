@@ -1,3 +1,95 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ------------------------------------------------------------------
+   Apartey design system
+   Warm paper background, ink text, one lime accent, hairline borders,
+   big light headlines and small mono labels.
+------------------------------------------------------------------- */
+
+@layer base {
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    @apply bg-cream text-ink font-sans antialiased;
+    font-feature-settings: 'ss01', 'cv11';
+  }
+  h1, h2, h3, h4 { @apply text-ink; }
+  ::selection { @apply bg-lime text-ink; }
+  :focus-visible { @apply outline-none ring-2 ring-ink/80 ring-offset-2 ring-offset-cream; }
+  input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; }
+}
+
+@layer components {
+  /* Layout */
+  .page { @apply mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8; }
+  .section { @apply py-16 md:py-24; }
+
+  /* Typography */
+  .eyebrow { @apply font-mono text-[11px] uppercase tracking-[0.08em] text-lime-deep; }
+  .display { @apply font-light tracking-tightest leading-[1.02]; }
+  .h-section { @apply text-4xl md:text-5xl font-light tracking-[-0.04em] leading-[1.05]; }
+  .h-page { @apply text-4xl md:text-6xl font-light tracking-[-0.045em] leading-[1.02]; }
+  .lead { @apply text-base md:text-lg text-muted leading-relaxed; }
+  .mark { @apply bg-lime rounded-[0.12em] px-[0.1em] pb-[0.06em] box-decoration-clone; }
+  .mono { @apply font-mono tabular-nums; }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium
+           transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 select-none;
+  }
+  .btn-lg { @apply px-5 py-3 text-[15px]; }
+  .btn-sm { @apply px-3 py-1.5 text-[13px]; }
+  .btn-lime { @apply btn bg-lime text-ink hover:bg-[#C6E53A]; }
+  .btn-ink { @apply btn bg-ink text-cream hover:bg-[#2B2B22]; }
+  .btn-outline { @apply btn border border-line bg-paper text-ink hover:bg-sand; }
+  .btn-ghost { @apply btn text-muted hover:text-ink hover:bg-sand/70; }
+  .btn-danger { @apply btn border border-red-200 bg-red-50 text-red-700 hover:bg-red-100; }
+
+  /* Surfaces */
+  .card { @apply rounded-2xl border border-line bg-paper; }
+  .card-pad { @apply p-5 md:p-6; }
+  .inset { @apply rounded-xl bg-sand/70; }
+  .divider { @apply border-t border-line; }
+
+  /* Forms */
+  .label { @apply mb-1.5 block text-[13px] font-medium text-ink; }
+  .hint { @apply mt-1.5 text-xs text-faint; }
+  .input {
+    @apply w-full rounded-lg border border-line bg-paper px-3.5 py-2.5 text-sm text-ink placeholder:text-faint
+           transition-colors focus:border-ink focus:outline-none focus:ring-0;
+  }
+  .checkbox { @apply h-4 w-4 rounded border-line text-ink accent-ink cursor-pointer; }
+
+  /* Badges */
+  .chip { @apply inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.06em]; }
+  .chip-lime { @apply chip bg-lime text-ink; }
+  .chip-neutral { @apply chip bg-sand text-muted; }
+  .chip-green { @apply chip bg-emerald-100 text-emerald-800; }
+  .chip-amber { @apply chip bg-amber-100 text-amber-800; }
+  .chip-red { @apply chip bg-red-100 text-red-700; }
+
+  /* Tabs / segmented control */
+  .segmented { @apply inline-flex rounded-lg border border-line bg-paper p-0.5; }
+  .segmented > button { @apply rounded-md px-3 py-1.5 text-[13px] text-muted transition-colors; }
+  .segmented > button[aria-pressed='true'] { @apply bg-ink text-cream; }
+}
+
+/* react-datepicker, restyled to match */
+.react-datepicker { font-family: inherit !important; border: 1px solid #DEDCD0 !important; border-radius: 14px !important; background: #FBFAF5 !important; box-shadow: 0 24px 48px -24px rgba(22,22,15,.25); overflow: hidden; }
+.react-datepicker__header { background: #F2F1EA !important; border-bottom: 1px solid #DEDCD0 !important; }
+.react-datepicker__current-month { font-weight: 500 !important; color: #16160F !important; }
+.react-datepicker__day-name { color: #8C8A78 !important; font-family: 'Geist Mono', monospace; font-size: 11px; }
+.react-datepicker__day { border-radius: 8px !important; color: #16160F; }
+.react-datepicker__day:hover { background: #E8E6DC !important; }
+.react-datepicker__day--selected, .react-datepicker__day--in-range, .react-datepicker__day--in-selecting-range,
+.react-datepicker__day--keyboard-selected { background: #16160F !important; color: #D4F24A !important; }
+.react-datepicker__day--in-range:not(.react-datepicker__day--range-start):not(.react-datepicker__day--range-end) { background: #EEF9C2 !important; color: #16160F !important; }
+.react-datepicker__day--disabled { color: #C4C2B4 !important; text-decoration: line-through; }
+.react-datepicker__triangle { display: none; }
+.react-datepicker-wrapper { width: 100%; }
+
+/* Leaflet popup to match cards */
+.leaflet-popup-content-wrapper { border-radius: 14px !important; background: #FBFAF5 !important; }
+.leaflet-popup-content { margin: 10px !important; }

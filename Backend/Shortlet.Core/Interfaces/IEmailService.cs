@@ -1,10 +1,11 @@
 // Backend/Shortlet.Core/Interfaces/IEmailService.cs
-using System.Threading.Tasks;
-
 namespace Shortlet.Core.Interfaces
 {
     public interface IEmailService
     {
-        Task SendBookingConfirmationAsync(string guestEmail, string guestName, string propertyName, string reference);
+        /// <summary>True when SMTP settings are present. When false, emails are logged instead of sent.</summary>
+        bool IsConfigured { get; }
+
+        Task SendEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken cancellationToken = default);
     }
 }

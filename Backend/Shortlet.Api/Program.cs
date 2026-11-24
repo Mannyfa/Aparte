@@ -1,83 +1,98 @@
 // Backend/Shortlet.Api/Program.cs
 using System.Text;
+using CloudinaryDotNet;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Shortlet.Api.Hubs;
 using Shortlet.Core.Interfaces;
 using Shortlet.Infrastructure.Data;
 using Shortlet.Infrastructure.Services;
-using Shortlet.Api.Hubs;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// 1. Add Controllers
+// ---------------------------------------------------------------------
+// 0. Configuration aliases
+// Older deployments used "PaystackSettings:*" and "CloudinarySettings:*".
+// Everything in the code now reads "Paystack:*" and "Cloudinary:*"; copy the
+// old names across so existing Render env vars keep working.
+// ---------------------------------------------------------------------
+var aliases = new Dictionary<string, string?>();
+foreach (var (newKey, oldKey) in new[]
+{
+    ("Paystack:SecretKey", "PaystackSettings:SecretKey"),
+    ("Cloudinary:CloudName", "CloudinarySettings:CloudName"),
+    ("Cloudinary:ApiKey", "CloudinarySettings:ApiKey"),
+    ("Cloudinary:ApiSecret", "CloudinarySettings:ApiSecret"),
+})
+{
+    if (string.IsNullOrEmpty(builder.Configuration[newKey]) && !string.IsNullOrEmpty(builder.Configuration[oldKey]))
+        aliases[newKey] = builder.Configuration[oldKey];
+}
+if (aliases.Count > 0) builder.Configuration.AddInMemoryCollection(aliases);
+
+// 1. Controllers
 builder.Services.AddControllers().AddJsonOptions(options =>
 {
-    // This stops the infinite JSON loop!
     options.JsonSerializerOptions.ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
 });
 builder.Services.AddEndpointsApiExplorer();
-
 builder.Services.AddSignalR();
 
-// 2. Configure Swagger to Support JWT Tokens
+// 2. Swagger with JWT support
 builder.Services.AddSwaggerGen(c =>
 {
     c.SwaggerDoc("v1", new OpenApiInfo { Title = "Shortlet API", Version = "v1" });
-    
-    // Add the "Authorize" button to Swagger UI
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\nExample: \"Bearer 12345abcdef\"",
+        Description = "Paste your JWT (without the 'Bearer ' prefix).",
         Name = "Authorization",
         In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
     });
-
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement()
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
         {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                },
-                Scheme = "oauth2",
-                Name = "Bearer",
-                In = ParameterLocation.Header,
-            },
+            new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" } },
             new List<string>()
         }
     });
 });
 
-// 3. Register Database Connection
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
+// 3. Database
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
+    ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is missing. Copy appsettings.example.json to appsettings.Development.json and fill it in.");
+builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
 
-// 4. Register Custom Services (Dependency Injection)
+// 4. Services
 builder.Services.AddScoped<IAuthService, AuthService>();
-
-builder.Services.AddScoped<Shortlet.Core.Interfaces.Repositories.IPropertyRepository, Shortlet.Infrastructure.Repositories.PropertyRepository>();
-builder.Services.AddScoped<Shortlet.Core.Interfaces.IPropertyService, Shortlet.Infrastructure.Services.PropertyService>();
-
-builder.Services.AddHttpClient<Shortlet.Core.Interfaces.IPaystackService, Shortlet.Infrastructure.Services.PaystackService>();
-builder.Services.AddScoped<Shortlet.Core.Interfaces.IBookingService, Shortlet.Infrastructure.Services.BookingService>();
-builder.Services.AddScoped<Shortlet.Core.Interfaces.IEmailService, Shortlet.Infrastructure.Services.EmailService>();
-
-// 1. Register the Email Queue as a Singleton (so the same queue is shared everywhere)
+builder.Services.AddHttpClient<IPaystackService, PaystackService>();
+builder.Services.AddHttpClient(); // IHttpClientFactory for the wallet payout calls
+builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddSingleton<IEmailQueue, EmailQueueService>();
-
-// 2. Register the Background Worker as a Hosted Service
 builder.Services.AddHostedService<EmailBackgroundWorker>();
 
-// 5. Configure JWT Authentication
+// Cloudinary is created lazily so a missing config only breaks uploads, not the whole API.
+builder.Services.AddSingleton(sp => new Lazy<Cloudinary>(() =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var cloudName = cfg["Cloudinary:CloudName"];
+    var apiKey = cfg["Cloudinary:ApiKey"];
+    var apiSecret = cfg["Cloudinary:ApiSecret"];
+    if (string.IsNullOrEmpty(cloudName) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(apiSecret))
+        throw new InvalidOperationException("Cloudinary is not configured (Cloudinary:CloudName / ApiKey / ApiSecret).");
+    return new Cloudinary(new Account(cloudName, apiKey, apiSecret)) { Api = { Secure = true } };
+}));
+
+// 5. JWT authentication
 var jwtSettings = builder.Configuration.GetSection("Jwt");
-var key = Encoding.UTF8.GetBytes(jwtSettings["Key"] ?? throw new InvalidOperationException("JWT Key is missing"));
+var jwtKey = jwtSettings["Key"];
+if (string.IsNullOrEmpty(jwtKey) || jwtKey.Length < 32)
+    throw new InvalidOperationException("Jwt:Key is missing or shorter than 32 characters.");
 
 builder.Services.AddAuthentication(options =>
 {
@@ -94,41 +109,59 @@ builder.Services.AddAuthentication(options =>
         ValidateIssuerSigningKey = true,
         ValidIssuer = jwtSettings["Issuer"],
         ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(key)
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey))
+    };
+
+    // Browsers can't send headers on WebSocket connections, so SignalR passes the JWT as ?access_token=
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Query["access_token"];
+            if (!string.IsNullOrEmpty(accessToken) && context.HttpContext.Request.Path.StartsWithSegments("/chathub"))
+                context.Token = accessToken;
+            return Task.CompletedTask;
+        }
     };
 });
 
-// --- UPDATED CORS POLICY ---
-// Allow our React frontend (both local and live Vercel) to talk to this API
+// 6. CORS (configure extra origins with Cors:AllowedOrigins)
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+allowedOrigins = allowedOrigins
+    .Concat(new[] { "https://aparteyng.vercel.app", "http://localhost:5173", "http://localhost:5174" })
+    .Distinct()
+    .ToArray();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins(
-                "https://aparteyng.vercel.app", // Your live Vercel domain
-                "http://localhost:5174", 
-                "http://localhost:5173"
-              )
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials(); // REQUIRED for SignalR (ChatHub) to work across domains!
+              .AllowCredentials(); // required for SignalR
     });
 });
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
-// Note: Swagger is available in Production now so you can test your live database easily.
+// Render / other hosts terminate TLS in front of the app.
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+});
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
+if (app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
-// IMPORTANT: Order matters here! CORS -> Auth -> Controllers
 app.UseCors("AllowFrontend");
-
-app.UseAuthentication(); // 1st: Who are you? (Validates the JWT)
-app.UseAuthorization();  // 2nd: What are you allowed to do? (Checks roles)
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapControllers();
 app.MapHub<ChatHub>("/chathub");

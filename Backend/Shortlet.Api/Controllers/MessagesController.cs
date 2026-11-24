@@ -1,12 +1,9 @@
 // Backend/Shortlet.Api/Controllers/MessagesController.cs
-using System;
-using System.Linq;
-using System.Security.Claims;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Shortlet.Api.Helpers;
 using Shortlet.Api.Hubs;
 using Shortlet.Core.Entities;
 using Shortlet.Infrastructure.Data;
@@ -16,7 +13,7 @@ namespace Shortlet.Api.Controllers
     public class SendMessageDto
     {
         public Guid ReceiverId { get; set; }
-        public string Content { get; set; }
+        public string Content { get; set; } = string.Empty;
     }
 
     [ApiController]
@@ -24,6 +21,8 @@ namespace Shortlet.Api.Controllers
     [Authorize]
     public class MessagesController : ControllerBase
     {
+        private const int MaxMessageLength = 2000;
+
         private readonly AppDbContext _context;
         private readonly IHubContext<ChatHub> _hubContext;
 
@@ -33,40 +32,45 @@ namespace Shortlet.Api.Controllers
             _hubContext = hubContext;
         }
 
-        // --- NEW: FETCH REAL USERS FOR THE SIDEBAR ---
+        /// <summary>
+        /// People I'm allowed to talk to: the hosts of places I've booked, the guests who've booked my places,
+        /// and anyone who already has a conversation with me. (Previously this returned every user.)
+        /// </summary>
+        private IQueryable<Guid> ContactIds(Guid myId)
+        {
+            var myHosts = _context.Bookings.Where(b => b.GuestId == myId).Select(b => b.Property.HostId);
+            var myGuests = _context.Bookings.Where(b => b.Property.HostId == myId).Select(b => b.GuestId);
+            var talkedTo = _context.Messages.Where(m => m.SenderId == myId).Select(m => m.ReceiverId)
+                .Union(_context.Messages.Where(m => m.ReceiverId == myId).Select(m => m.SenderId));
+            return myHosts.Union(myGuests).Union(talkedTo);
+        }
+
         [HttpGet("contacts")]
         public async Task<IActionResult> GetContacts()
         {
-            var myId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+            var myId = User.GetUserId();
+            if (myId == null) return Unauthorized();
 
-            // Fetches all other users in the system so you have real people to chat with!
+            var ids = ContactIds(myId.Value);
             var contacts = await _context.Users
-                .Where(u => u.Id != myId)
-                .Select(u => new { 
-                    id = u.Id, 
-                    name = u.Name 
-                })
+                .Where(u => u.Id != myId.Value && ids.Contains(u.Id))
+                .Select(u => new { id = u.Id, name = u.Name })
                 .ToListAsync();
 
             return Ok(contacts);
         }
 
-        // --- NEW: FETCH CHAT HISTORY ---
-        [HttpGet("{otherUserId}")]
+        [HttpGet("{otherUserId:guid}")]
         public async Task<IActionResult> GetConversation(Guid otherUserId)
         {
-            var myId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+            var myId = User.GetUserId();
+            if (myId == null) return Unauthorized();
 
             var messages = await _context.Messages
-                .Where(m => (m.SenderId == myId && m.ReceiverId == otherUserId) || 
-                            (m.SenderId == otherUserId && m.ReceiverId == myId))
+                .Where(m => (m.SenderId == myId.Value && m.ReceiverId == otherUserId) ||
+                            (m.SenderId == otherUserId && m.ReceiverId == myId.Value))
                 .OrderBy(m => m.Timestamp)
-                .Select(m => new {
-                    m.Id,
-                    m.Content,
-                    m.Timestamp,
-                    IsMine = m.SenderId == myId
-                })
+                .Select(m => new { m.Id, m.Content, m.Timestamp, IsMine = m.SenderId == myId.Value })
                 .ToListAsync();
 
             return Ok(messages);
@@ -75,26 +79,29 @@ namespace Shortlet.Api.Controllers
         [HttpPost]
         public async Task<IActionResult> SendMessage([FromBody] SendMessageDto request)
         {
-            var myId = Guid.Parse(User.FindFirst(ClaimTypes.NameIdentifier).Value);
+            var myId = User.GetUserId();
+            if (myId == null) return Unauthorized();
 
-            var message = new Message
-            {
-                SenderId = myId,
-                ReceiverId = request.ReceiverId,
-                Content = request.Content
-            };
+            var content = request.Content?.Trim() ?? string.Empty;
+            if (content.Length == 0) return BadRequest(new { message = "Message can't be empty." });
+            if (content.Length > MaxMessageLength) return BadRequest(new { message = $"Messages are limited to {MaxMessageLength} characters." });
+            if (request.ReceiverId == myId.Value) return BadRequest(new { message = "You can't message yourself." });
 
+            var allowed = await ContactIds(myId.Value).AnyAsync(id => id == request.ReceiverId);
+            if (!allowed) return StatusCode(403, new { message = "You can only message your hosts or guests." });
+
+            var message = new Message { SenderId = myId.Value, ReceiverId = request.ReceiverId, Content = content };
             _context.Messages.Add(message);
             await _context.SaveChangesAsync();
 
-            // Beam it instantly to the other person!
-            await _hubContext.Clients.Group(request.ReceiverId.ToString())
-                .SendAsync("ReceiveMessage", new {
-                    id = message.Id,
-                    content = message.Content,
-                    timestamp = message.Timestamp,
-                    isMine = false // To the receiver, it's incoming
-                });
+            await _hubContext.Clients.Group(request.ReceiverId.ToString()).SendAsync("ReceiveMessage", new
+            {
+                id = message.Id,
+                senderId = myId.Value,
+                content = message.Content,
+                timestamp = message.Timestamp,
+                isMine = false
+            });
 
             return Ok(new { id = message.Id, content = message.Content, timestamp = message.Timestamp, isMine = true });
         }
