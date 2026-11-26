@@ -10,6 +10,7 @@ namespace Shortlet.Core.DTOs
         public string Phone { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty;
         public string Role { get; set; } = "Guest";
+        public string? ReferralCode { get; set; }
     }
 
     public class LoginDto

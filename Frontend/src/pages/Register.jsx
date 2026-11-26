@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ArrowRight, Luggage, KeyRound } from 'lucide-react';
 import api, { errorMessage } from '../utils/api';
@@ -14,6 +14,8 @@ export default function Register() {
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', password: '', role: 'guest' });
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const referralCode = (searchParams.get('ref') || '').trim();
 
   const set = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
 
@@ -21,7 +23,7 @@ export default function Register() {
     e.preventDefault();
     setLoading(true);
     try {
-      await api.post('/Auth/register', formData);
+      await api.post('/Auth/register', referralCode ? { ...formData, referralCode } : formData);
       toast.success('Account created. Please log in.');
       navigate('/login');
     } catch (error) {
@@ -39,6 +41,9 @@ export default function Register() {
       footer={<>Already have an account? <Link to="/login" className="text-ink underline underline-offset-4">Log in</Link></>}
     >
       <form onSubmit={handleRegister} className="space-y-4">
+        {referralCode && (
+          <p className="rounded-xl bg-sand px-3 py-2 text-sm text-ink">You were invited by a friend: you both get ₦5,000 credit after your first stay.</p>
+        )}
         <fieldset>
           <legend className="label">I’m joining to…</legend>
           <div className="grid grid-cols-2 gap-2">

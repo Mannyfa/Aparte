@@ -19,6 +19,8 @@ namespace Shortlet.Api.Controllers
         public string Type { get; set; } = string.Empty;
         public decimal PricePerNight { get; set; }
         public decimal CautionFee { get; set; }
+        public decimal? WeekendPricePerNight { get; set; }
+        public int MinNights { get; set; } = 1;
         public string City { get; set; } = string.Empty;
         public string State { get; set; } = string.Empty;
         public string Area { get; set; } = string.Empty;
@@ -94,6 +96,8 @@ namespace Shortlet.Api.Controllers
             if (string.IsNullOrWhiteSpace(r.City)) return "City is required.";
             if (r.PricePerNight <= 0) return "Price per night must be greater than zero.";
             if (r.CautionFee < 0) return "Caution fee can't be negative.";
+            if (r.WeekendPricePerNight is <= 0) return "Weekend price must be greater than zero.";
+            if (r.MinNights < 1 || r.MinNights > 90) return "Minimum stay must be between 1 and 90 nights.";
             return null;
         }
 
@@ -194,6 +198,8 @@ namespace Shortlet.Api.Controllers
                 Type = request.Type?.Trim() ?? "",
                 PricePerNight = request.PricePerNight,
                 CautionFee = request.CautionFee,
+                WeekendPricePerNight = request.WeekendPricePerNight,
+                MinNights = request.MinNights,
                 City = request.City.Trim(),
                 State = request.State?.Trim() ?? "",
                 Area = request.Area?.Trim() ?? "",
@@ -251,6 +257,8 @@ namespace Shortlet.Api.Controllers
             property.Type = request.Type?.Trim() ?? "";
             property.PricePerNight = request.PricePerNight;   // existing bookings keep the price they were charged
             property.CautionFee = request.CautionFee;
+            property.WeekendPricePerNight = request.WeekendPricePerNight;
+            property.MinNights = request.MinNights;
             property.City = request.City.Trim();
             property.State = request.State?.Trim() ?? "";
             property.Area = request.Area?.Trim() ?? "";
@@ -310,6 +318,12 @@ namespace Shortlet.Api.Controllers
         {
             p.Id, p.Title, p.Description, p.Type, p.PricePerNight,
             p.CautionFee,
+            HostId = p.HostId,
+            p.WeekendPricePerNight,
+            p.MinNights,
+            PriceRules = _context.PriceRules.Where(r => r.PropertyId == p.Id).OrderBy(r => r.StartDate)
+                .Select(r => new PriceRuleDto { Id = r.Id, StartDate = r.StartDate, EndDate = r.EndDate, NightlyPrice = r.NightlyPrice, Label = r.Label })
+                .ToList(),
             p.City, p.State, p.Area,
             p.ImageUrls,
             p.Amenities,

@@ -196,7 +196,7 @@ namespace Shortlet.Api.Services
                 return new(true, null, true, paid, paid, 0, 0, freeUntil);
 
             var addOns = await _db.BookingAddOns.Where(a => a.BookingId == b.Id).SumAsync(a => a.Price);
-            var roomWithFee = b.TotalPrice - b.CautionFeeAmount - addOns;
+            var roomWithFee = BookingMoney.RoomWithFee(b, addOns);
             var room = roomWithFee / (1 + BookingRules.PlatformFeeRate);
             var fee = Math.Round(roomWithFee - room, 2);
             var keptByHost = Math.Round(room * 0.5m, 2);

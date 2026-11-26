@@ -33,6 +33,9 @@ namespace Shortlet.Api.Services
         /// <summary>Hours after the (UTC midnight) check-in date by which a host must accept a paid booking. 12h ≈ 1pm in Lagos.</summary>
         private TimeSpan HostResponseDeadline => TimeSpan.FromHours(int.TryParse(_config["Escrow:HostResponseHoursAfterCheckIn"], out var h) && h >= 0 ? h : 12);
 
+        /// <summary>Credit each side gets (NGN) when a referred user's first stay completes.</summary>
+        public const decimal ReferralRewardAmount = 5000m;
+
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             // Let the app finish starting before the first run.
@@ -56,6 +59,7 @@ namespace Shortlet.Api.Services
                 ("resume caution releases", ResumeCautionReleasesAsync),
                 ("retry failed refunds", RetryFailedRefundsAsync),
                 ("reconcile pending withdrawals", ReconcileWithdrawalsAsync),
+                ("pay referral rewards", PayReferralRewardsAsync),
             };
 
             foreach (var (name, run) in steps)
@@ -158,6 +162,39 @@ namespace Shortlet.Api.Services
                 if (!ok && r.Attempts + 1 >= BookingFinanceService.MaxRefundAttempts)
                     _logger.LogCritical("Refund of ₦{Amount:N2} on {Reference} has failed {Max} times. Refund it manually in the Paystack dashboard.",
                         r.Amount, r.TransactionReference, BookingFinanceService.MaxRefundAttempts);
+            }
+        }
+
+        private static async Task PayReferralRewardsAsync(IServiceProvider sp)
+        {
+            var db = sp.GetRequiredService<AppDbContext>();
+            var now = DateTime.UtcNow;
+            var okStatuses = new[] { "paid", "confirmed", "completed" };
+
+            var userIds = await db.Users
+                .Where(u => u.ReferredById != null && u.ReferralRewardPaidAt == null
+                            && db.Bookings.Any(b => b.GuestId == u.Id && okStatuses.Contains(b.Status) && b.CheckOut <= now))
+                .Select(u => u.Id).Take(50).ToListAsync();
+
+            foreach (var id in userIds)
+            {
+                await using var tx = await db.Database.BeginTransactionAsync();
+                var user = await db.Users.FirstOrDefaultAsync(u => u.Id == id);
+                if (user == null || user.ReferredById == null || user.ReferralRewardPaidAt != null)
+                {
+                    await tx.RollbackAsync();
+                    continue;
+                }
+
+                var referrerId = user.ReferredById.Value;
+                if (referrerId != user.Id)
+                {
+                    db.UserCredits.Add(new Shortlet.Core.Entities.UserCredit { UserId = user.Id, Amount = ReferralRewardAmount, Reason = "referral_reward", SourceUserId = referrerId });
+                    db.UserCredits.Add(new Shortlet.Core.Entities.UserCredit { UserId = referrerId, Amount = ReferralRewardAmount, Reason = "referral_reward", SourceUserId = user.Id });
+                }
+                user.ReferralRewardPaidAt = now;
+                await db.SaveChangesAsync();
+                await tx.CommitAsync();
             }
         }
 

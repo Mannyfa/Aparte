@@ -37,6 +37,7 @@ namespace Shortlet.Api.Controllers
                     .Select(b => new {
                         b.Id,
                         b.PropertyId,
+                        HostId = b.Property.HostId,
                         PropertyTitle = b.Property.Title,
                         
                         // FIX: Set to empty string so the build passes! 

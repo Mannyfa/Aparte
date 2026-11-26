@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard, Home as HomeIcon, ClipboardList, Wallet, ShieldCheck, Plus, Upload, Check, X, RefreshCw,
-  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff, Lock, CalendarDays, Pencil, Trash2,
+  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff, Lock, CalendarDays, Pencil, Trash2, FileText, Tag,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
@@ -26,6 +26,104 @@ function PageHead({ eyebrow, title, lead, action }) {
   );
 }
 
+/** Seasonal price rules for one listing (host only). */
+function SeasonalPrices({ propertyId }) {
+  const [rules, setRules] = useState([]);
+  const [loadingRules, setLoadingRules] = useState(true);
+  const [form, setForm] = useState({ startDate: '', endDate: '', nightlyPrice: '', label: '' });
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+
+  const sortRules = (list) => [...list].sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)));
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingRules(true);
+    api.get(`/properties/${propertyId}/price-rules`)
+      .then((res) => { if (!cancelled) setRules(sortRules(res.data || [])); })
+      .catch((err) => { if (!cancelled) toast.error(errorMessage(err, "Couldn't load seasonal prices.")); })
+      .finally(() => { if (!cancelled) setLoadingRules(false); });
+    return () => { cancelled = true; };
+  }, [propertyId]);
+
+  const setField = (e) => setForm((f) => ({ ...f, [e.target.name]: e.target.value }));
+
+  const addRule = async (e) => {
+    e.preventDefault();
+    setFormError('');
+    const price = Number(form.nightlyPrice);
+    if (!form.startDate || !form.endDate) return setFormError('Choose a start and end date.');
+    if (form.endDate < form.startDate) return setFormError('The end date must be on or after the start date.');
+    if (!(price > 0)) return setFormError('Enter a nightly price above zero.');
+    setSaving(true);
+    try {
+      const res = await api.post(`/properties/${propertyId}/price-rules`, {
+        startDate: form.startDate, endDate: form.endDate, nightlyPrice: price, label: form.label.trim() || null,
+      });
+      setRules((list) => sortRules([...list, res.data]));
+      setForm({ startDate: '', endDate: '', nightlyPrice: '', label: '' });
+      toast.success('Season price added.');
+    } catch (error) {
+      setFormError(errorMessage(error, "Couldn't add this season price."));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeRule = async (rule) => {
+    if (!window.confirm('Remove this season price?')) return;
+    try {
+      await api.delete(`/properties/${propertyId}/price-rules/${rule.id}`);
+      setRules((list) => list.filter((r) => r.id !== rule.id));
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't remove this season price."));
+    }
+  };
+
+  return (
+    <div className="border-t border-line bg-cream/60 p-4">
+      <p className="eyebrow mb-3 flex items-center gap-1.5"><Tag size={12} /> Seasonal prices</p>
+      {loadingRules ? (
+        <Bone className="h-10 w-full" />
+      ) : rules.length === 0 ? (
+        <p className="mb-3 text-xs text-muted">No seasonal prices. Dates without a season use your weekend or base price.</p>
+      ) : (
+        <ul className="mb-3 divide-y divide-line rounded-xl border border-line bg-paper">
+          {rules.map((r) => (
+            <li key={r.id} className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm">
+              <div className="min-w-0">
+                <p className="truncate">{r.label || 'Season price'} <span className="mono ml-1">{naira(r.nightlyPrice)}</span></p>
+                <p className="font-mono text-[11px] text-faint">{formatDay(r.startDate)} → {formatDay(r.endDate)}</p>
+              </div>
+              <button type="button" onClick={() => removeRule(r)} className="btn-ghost btn-sm shrink-0 text-red-700 hover:bg-red-50" aria-label="Remove season price"><Trash2 size={13} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form onSubmit={addRule} className="grid grid-cols-2 gap-2">
+        <div className="min-w-0">
+          <label className="label" htmlFor={`sp-start-${propertyId}`}>Start date</label>
+          <input id={`sp-start-${propertyId}`} type="date" name="startDate" value={form.startDate} onChange={setField} className="input text-base sm:text-sm" />
+        </div>
+        <div className="min-w-0">
+          <label className="label" htmlFor={`sp-end-${propertyId}`}>End date</label>
+          <input id={`sp-end-${propertyId}`} type="date" name="endDate" value={form.endDate} min={form.startDate || undefined} onChange={setField} className="input text-base sm:text-sm" />
+        </div>
+        <div className="min-w-0">
+          <label className="label" htmlFor={`sp-price-${propertyId}`}>Nightly price (₦)</label>
+          <input id={`sp-price-${propertyId}`} type="number" min="1" name="nightlyPrice" value={form.nightlyPrice} onChange={setField} placeholder="120000" className="input mono text-base sm:text-sm" />
+        </div>
+        <div className="min-w-0">
+          <label className="label" htmlFor={`sp-label-${propertyId}`}>Label <span className="font-normal text-faint">optional</span></label>
+          <input id={`sp-label-${propertyId}`} name="label" maxLength={60} value={form.label} onChange={setField} placeholder="Christmas" className="input text-base sm:text-sm" />
+        </div>
+        {formError && <p className="col-span-2 text-xs text-red-700" role="alert">{formError}</p>}
+        <button type="submit" disabled={saving} className="btn-outline btn-sm col-span-2"><Plus size={14} /> {saving ? 'Adding…' : 'Add season price'}</button>
+      </form>
+    </div>
+  );
+}
+
 export default function Dashboard() {
   const { user, isAuthenticated } = useContext(AuthContext);
   
@@ -45,7 +143,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState({
-    title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: ''
+    title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '', weekendPricePerNight: '', minNights: 1
   });
 
   const [selectedImages, setSelectedImages] = useState([]);
@@ -203,7 +301,7 @@ export default function Dashboard() {
   };
 
   const resetListingForm = () => {
-    setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '' });
+    setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '', weekendPricePerNight: '', minNights: 1 });
     setSelectedImages([]); setSelectedAmenities([]); setSelectedRules([]); setAddOns([]); setNewAddOn({ name: '', description: '', price: '' });
     setEditingId(null); setExistingImages([]);
   };
@@ -215,6 +313,7 @@ export default function Dashboard() {
     setFormData({
       title: p.title || '', description: p.description || '', type: p.type || 'Apartment',
       pricePerNight: p.pricePerNight ?? '', cautionFee: p.cautionFee || '', city: p.city || '', state: p.state || '', area: p.area || '',
+      weekendPricePerNight: p.weekendPricePerNight ?? '', minNights: p.minNights ?? 1,
     });
     setSelectedAmenities(p.amenities || []);
     setSelectedRules(p.houseRules || []);
@@ -243,6 +342,10 @@ export default function Dashboard() {
     if (selectedImages.length + existingImages.length === 0) return toast.error("Please add at least one photo.");
     if (selectedImages.length + existingImages.length > 5) return toast.error("A listing can have up to 5 photos.");
 
+    if (formData.weekendPricePerNight !== '' && !(Number(formData.weekendPricePerNight) > 0)) return toast.error("Weekend price must be above zero, or leave it blank.");
+    const minNightsNum = Number(formData.minNights);
+    if (!Number.isInteger(minNightsNum) || minNightsNum < 1 || minNightsNum > 90) return toast.error("Minimum stay must be a whole number from 1 to 90.");
+
     setLoading(true);
     try {
       const submitData = new FormData();
@@ -254,6 +357,8 @@ export default function Dashboard() {
       submitData.append('city', formData.city);
       submitData.append('state', formData.state);
       submitData.append('area', formData.area);
+      if (formData.weekendPricePerNight !== '') submitData.append('weekendPricePerNight', formData.weekendPricePerNight);
+      submitData.append('minNights', minNightsNum);
       
       submitData.append('amenities', selectedAmenities.join(','));
       submitData.append('houseRules', selectedRules.join(',')); // Added rules to submit
@@ -568,6 +673,16 @@ export default function Dashboard() {
               <input id="cautionFee" min="0" type="number" name="cautionFee" value={formData.cautionFee} onChange={handleInputChange} placeholder="50000" className="input mono md:w-1/2" />
               <p className="hint">Charged to the guest and held in Apartey escrow, then refunded if nothing is damaged.</p>
             </div>
+            <div>
+              <label className="label" htmlFor="weekendPricePerNight">Weekend nightly price (Fri &amp; Sat nights) <span className="font-normal text-faint">optional</span></label>
+              <input id="weekendPricePerNight" min="1" type="number" name="weekendPricePerNight" value={formData.weekendPricePerNight} onChange={handleInputChange} placeholder="Same as base price" className="input mono text-base sm:text-sm" />
+              <p className="hint">Leave blank to charge the base price every night.</p>
+            </div>
+            <div>
+              <label className="label" htmlFor="minNights">Minimum stay (nights)</label>
+              <input id="minNights" min="1" max="90" step="1" type="number" name="minNights" value={formData.minNights} onChange={handleInputChange} className="input mono text-base sm:text-sm" />
+              <p className="hint">Between 1 and 90 nights.</p>
+            </div>
           </div>
         </section>
 
@@ -689,7 +804,7 @@ export default function Dashboard() {
           eyebrow="Listings"
           title="Your places"
           lead={`${hostProperties.length} of ${isVerified ? 'unlimited' : '2'} listings used`}
-          action={<button onClick={startNewListing} className="btn-lime"><Plus size={16} /> New listing</button>}
+          action={<div className="flex flex-wrap gap-2"><Link to="/host/statement" className="btn-outline"><FileText size={16} /> Monthly statement</Link><button onClick={startNewListing} className="btn-lime"><Plus size={16} /> New listing</button></div>}
         />
         {fetchingListings ? (
           <ListingCardsSkeleton count={3} />
@@ -716,7 +831,9 @@ export default function Dashboard() {
                     </p>
                   </div>
                 </Link>
-                <div className="mt-auto flex gap-1 border-t border-line p-2">
+                <div className="mt-auto" />
+                <SeasonalPrices propertyId={p.id} />
+                <div className="flex gap-1 border-t border-line p-2">
                   <button onClick={() => startEdit(p)} className="btn-ghost btn-sm flex-1"><Pencil size={13} /> Edit</button>
                   <button onClick={() => { setCalendarPropertyId(p.id); setActiveTab('calendar'); }} className="btn-ghost btn-sm flex-1"><CalendarDays size={13} /> Calendar</button>
                   <button onClick={() => handleDeleteListing(p)} className="btn-ghost btn-sm text-red-700 hover:bg-red-50" aria-label={`Delete ${p.title}`}><Trash2 size={13} /></button>
@@ -1058,6 +1175,7 @@ export default function Dashboard() {
             );
           })}
         </nav>
+        <Link to="/host/statement" className="mt-4 hidden items-center gap-2 px-3 text-[13px] text-muted hover:text-ink md:flex"><FileText size={14} /> Monthly statement</Link>
         {isVerified && (
           <p className="mt-6 hidden items-center gap-1.5 text-xs text-muted md:flex"><BadgeCheck size={14} className="text-lime-deep" /> Verified host</p>
         )}

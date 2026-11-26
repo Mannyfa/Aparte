@@ -89,6 +89,9 @@ namespace Shortlet.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<decimal>("CreditApplied")
+                        .HasColumnType("numeric");
+
                     b.Property<Guid>("GuestId")
                         .HasColumnType("uuid");
 
@@ -96,8 +99,17 @@ namespace Shortlet.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("PromoCodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("PromoDiscount")
+                        .HasColumnType("numeric");
+
                     b.Property<Guid>("PropertyId")
                         .HasColumnType("uuid");
+
+                    b.Property<decimal>("RoomAmount")
+                        .HasColumnType("numeric");
 
                     b.Property<decimal>("ServiceFee")
                         .HasColumnType("numeric");
@@ -115,6 +127,8 @@ namespace Shortlet.Infrastructure.Migrations
 
                     b.HasIndex("PaymentReference")
                         .IsUnique();
+
+                    b.HasIndex("PromoCodeId");
 
                     b.HasIndex("PropertyId", "CheckOut");
 
@@ -234,6 +248,74 @@ namespace Shortlet.Infrastructure.Migrations
                     b.ToTable("Messages");
                 });
 
+            modelBuilder.Entity("Shortlet.Core.Entities.PriceRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("EndDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Label")
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("NightlyPrice")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PropertyId", "StartDate");
+
+                    b.ToTable("PriceRules");
+                });
+
+            modelBuilder.Entity("Shortlet.Core.Entities.PromoCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DiscountType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("DiscountValue")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<int?>("UsageLimit")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("PromoCodes");
+                });
+
             modelBuilder.Entity("Shortlet.Core.Entities.Property", b =>
                 {
                     b.Property<Guid>("Id")
@@ -286,6 +368,9 @@ namespace Shortlet.Infrastructure.Migrations
                     b.Property<double>("Longitude")
                         .HasColumnType("double precision");
 
+                    b.Property<int>("MinNights")
+                        .HasColumnType("integer");
+
                     b.Property<decimal>("PricePerNight")
                         .HasColumnType("numeric");
 
@@ -304,6 +389,9 @@ namespace Shortlet.Infrastructure.Migrations
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<decimal?>("WeekendPricePerNight")
+                        .HasColumnType("numeric");
 
                     b.HasKey("Id");
 
@@ -525,6 +613,29 @@ namespace Shortlet.Infrastructure.Migrations
                     b.ToTable("Reviews");
                 });
 
+            modelBuilder.Entity("Shortlet.Core.Entities.SavedProperty", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PropertyId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "PropertyId")
+                        .IsUnique();
+
+                    b.ToTable("SavedProperties");
+                });
+
             modelBuilder.Entity("Shortlet.Core.Entities.SplitGroup", b =>
                 {
                     b.Property<Guid>("Id")
@@ -663,6 +774,15 @@ namespace Shortlet.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("ReferralCode")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("ReferralRewardPaidAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ReferredById")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasColumnType("text");
@@ -673,7 +793,39 @@ namespace Shortlet.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ReferralCode")
+                        .IsUnique();
+
                     b.ToTable("Users");
+                });
+
+            modelBuilder.Entity("Shortlet.Core.Entities.UserCredit", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("SourceUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("UserCredits");
                 });
 
             modelBuilder.Entity("Shortlet.Core.Entities.UserToken", b =>

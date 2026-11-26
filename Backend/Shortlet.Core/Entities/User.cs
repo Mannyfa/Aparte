@@ -19,6 +19,11 @@ namespace Shortlet.Core.Entities
         // --- KYC & Verification Fields ---
         public string VerificationStatus { get; set; } = "Unverified"; 
         public string? IdDocumentUrl { get; set; }
-        public string? IdDocumentType { get; set; } 
+        public string? IdDocumentType { get; set; }
+
+        // --- Referrals ---
+        public string? ReferralCode { get; set; }
+        public Guid? ReferredById { get; set; }
+        public DateTime? ReferralRewardPaidAt { get; set; }
     }
 }

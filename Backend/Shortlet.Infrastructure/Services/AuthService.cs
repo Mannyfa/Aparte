@@ -52,6 +52,14 @@ namespace Shortlet.Infrastructure.Services
                 Role = NormaliseSignupRole(request.Role)
             };
 
+            var refCode = request.ReferralCode?.Trim().ToUpperInvariant();
+            if (!string.IsNullOrEmpty(refCode))
+            {
+                var referrerId = await _context.Users.Where(u => u.ReferralCode == refCode)
+                    .Select(u => (Guid?)u.Id).FirstOrDefaultAsync();
+                if (referrerId != null) user.ReferredById = referrerId;
+            }
+
             _context.Users.Add(user);
             await _context.SaveChangesAsync();
 

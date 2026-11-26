@@ -20,6 +20,12 @@ import MyTrips from './pages/MyTrips';
 import PropertyDetails from './pages/PropertyDetails';
 import AdminDashboard from './pages/AdminDashboard';
 import SplitDashboard from './pages/SplitDashboard';
+import Inbox from './pages/Inbox';
+import Conversation from './pages/Conversation';
+import Saved from './pages/Saved';
+import Receipt from './pages/Receipt';
+import HostStatement from './pages/HostStatement';
+import Referrals from './pages/Referrals';
 
 /** Scrolls to "#section" links (React Router doesn't) and to the top on page changes. */
 function ScrollManager() {
@@ -83,6 +89,12 @@ function Shell() {
           <Route path="/property/:id" element={<PropertyDetails />} />
           <Route path="/admin" element={<AdminDashboard />} />
           <Route path="/split-success/:id" element={<SplitDashboard />} />
+          <Route path="/messages" element={<Inbox />} />
+          <Route path="/messages/:userId" element={<Conversation />} />
+          <Route path="/saved" element={<Saved />} />
+          <Route path="/receipts/:bookingId" element={<Receipt />} />
+          <Route path="/host/statement" element={<HostStatement />} />
+          <Route path="/referrals" element={<Referrals />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </main>

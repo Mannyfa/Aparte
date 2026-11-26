@@ -15,7 +15,11 @@ namespace Shortlet.Core.Entities
         public string Type { get; set; } = string.Empty;
         public decimal PricePerNight { get; set; }
         public decimal CautionFee { get; set; } = 0;
-        
+        /// <summary>Optional nightly price for Friday and Saturday nights.</summary>
+        public decimal? WeekendPricePerNight { get; set; }
+        /// <summary>Minimum number of nights per stay.</summary>
+        public int MinNights { get; set; } = 1;
+
         // Location data
         public string State { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;

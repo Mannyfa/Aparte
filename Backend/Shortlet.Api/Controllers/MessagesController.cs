@@ -62,6 +62,71 @@ namespace Shortlet.Api.Controllers
             return Ok(contacts);
         }
 
+        [HttpGet("inbox")]
+        public async Task<IActionResult> GetInbox()
+        {
+            var myId = User.GetUserId();
+            if (myId == null) return Unauthorized();
+            var me = myId.Value;
+
+            var ids = ContactIds(me);
+            var contacts = await _context.Users
+                .Where(u => u.Id != me && ids.Contains(u.Id))
+                .Select(u => new { u.Id, u.Name })
+                .ToListAsync();
+
+            var msgs = await _context.Messages
+                .Where(m => m.SenderId == me || m.ReceiverId == me)
+                .Select(m => new { m.SenderId, m.ReceiverId, m.Content, m.Timestamp, m.IsRead })
+                .ToListAsync();
+
+            var items = contacts.Select(c =>
+            {
+                var thread = msgs.Where(m => m.SenderId == c.Id || m.ReceiverId == c.Id).ToList();
+                var last = thread.OrderByDescending(m => m.Timestamp).FirstOrDefault();
+                return new
+                {
+                    userId = c.Id,
+                    name = c.Name,
+                    lastMessage = last?.Content,
+                    lastAt = last?.Timestamp,
+                    lastIsMine = last != null && last.SenderId == me,
+                    unreadCount = thread.Count(m => m.SenderId == c.Id && m.ReceiverId == me && !m.IsRead)
+                };
+            })
+            .OrderBy(i => i.lastAt == null)
+            .ThenByDescending(i => i.lastAt)
+            .ToList();
+
+            return Ok(items);
+        }
+
+        [HttpGet("with/{otherUserId:guid}")]
+        public async Task<IActionResult> GetConversationWith(Guid otherUserId)
+        {
+            var myId = User.GetUserId();
+            if (myId == null) return Unauthorized();
+            var me = myId.Value;
+
+            var other = await _context.Users.Where(u => u.Id == otherUserId)
+                .Select(u => new { id = u.Id, name = u.Name }).FirstOrDefaultAsync();
+            if (other == null) return NotFound(new { message = "User not found." });
+
+            var unread = await _context.Messages
+                .Where(m => m.SenderId == otherUserId && m.ReceiverId == me && !m.IsRead).ToListAsync();
+            foreach (var m in unread) m.IsRead = true;
+            if (unread.Count > 0) await _context.SaveChangesAsync();
+
+            var messages = await _context.Messages
+                .Where(m => (m.SenderId == me && m.ReceiverId == otherUserId) ||
+                            (m.SenderId == otherUserId && m.ReceiverId == me))
+                .OrderBy(m => m.Timestamp)
+                .Select(m => new { id = m.Id, content = m.Content, timestamp = m.Timestamp, isMine = m.SenderId == me, isRead = m.IsRead })
+                .ToListAsync();
+
+            return Ok(new { user = other, messages });
+        }
+
         [HttpGet("{otherUserId:guid}")]
         public async Task<IActionResult> GetConversation(Guid otherUserId)
         {
@@ -90,6 +155,8 @@ namespace Shortlet.Api.Controllers
             if (request.ReceiverId == myId.Value) return BadRequest(new { message = "You can't message yourself." });
 
             var allowed = await ContactIds(myId.Value).AnyAsync(id => id == request.ReceiverId);
+            if (!allowed)
+                allowed = await _context.Properties.AnyAsync(p => p.HostId == request.ReceiverId && p.Status == "active");
             if (!allowed) return StatusCode(403, new { message = "You can only message your hosts or guests." });
 
             var message = new Message { SenderId = myId.Value, ReceiverId = request.ReceiverId, Content = content };

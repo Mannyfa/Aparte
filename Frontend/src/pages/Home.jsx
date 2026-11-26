@@ -9,7 +9,7 @@ import { errorMessage } from '../utils/api';
 import { peek, getCached, prefetch } from '../utils/cache';
 import { AuthContext } from '../context/AuthContext';
 import PropertyMap from '../components/PropertyMap';
-import { EmptyState, SectionHeader } from '../components/ui';
+import { EmptyState, SectionHeader, SaveHeart } from '../components/ui';
 import { PropertyGridSkeleton } from '../components/Skeletons';
 import { naira, img } from '../utils/format';
 import DatePicker from 'react-datepicker';
@@ -105,12 +105,13 @@ function PropertyCard({ property, onOpen }) {
     prefetch(`/Properties/${property.id}/booked-dates`);
   };
   return (
+    <div className="relative">
     <button
       onClick={onOpen}
       onMouseEnter={warm}
       onFocus={warm}
       onTouchStart={warm}
-      className="group flex flex-col overflow-hidden rounded-2xl border border-line bg-paper text-left transition-shadow hover:shadow-lift"
+      className="group flex h-full w-full flex-col overflow-hidden rounded-2xl border border-line bg-paper text-left transition-shadow hover:shadow-lift"
     >
       <div className="relative aspect-[4/3] overflow-hidden bg-sand">
         {property.imageUrls?.length > 0 ? (
@@ -151,6 +152,8 @@ function PropertyCard({ property, onOpen }) {
         </div>
       </div>
     </button>
+    <SaveHeart propertyId={property.id} className="absolute right-2 top-2" />
+    </div>
   );
 }
 

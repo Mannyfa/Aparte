@@ -142,3 +142,18 @@ html { -webkit-tap-highlight-color: transparent; }
   .no-scrollbar { scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
 }
+
+/* Print: receipts and host statements */
+@media print {
+  @page { size: A4; margin: 14mm; }
+  header, footer, nav, button, .print-hide { display: none !important; }
+  html, body { background: #fff !important; color: #000 !important; }
+  * { box-shadow: none !important; text-shadow: none !important; background-image: none !important; }
+  .card, .inset { background: #fff !important; border-color: #999 !important; }
+  .page { max-width: none !important; padding: 0 !important; }
+  .print-area { color: #000 !important; }
+  .print-area * { color: #000 !important; }
+  tr, .print-block { page-break-inside: avoid; break-inside: avoid; }
+  .print-scroll { overflow: visible !important; }
+  a { text-decoration: none; }
+}

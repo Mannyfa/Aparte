@@ -1,10 +1,16 @@
 import React, { useContext, useEffect, useState } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { Menu, X, LogOut } from 'lucide-react';
 import { AuthContext } from '../context/AuthContext';
 import { Logo } from './ui';
 import { initials } from '../utils/format';
 import NotificationsToggle from './NotificationsToggle';
+import api from '../utils/api';
+
+const UnreadBadge = ({ count }) =>
+  count > 0 ? (
+    <span className="ml-1.5 inline-grid h-4 min-w-[1rem] place-items-center rounded-full bg-lime px-1 font-mono text-[10px] text-ink">{count}</span>
+  ) : null;
 
 const sectionLinks = [
   { href: '/#stays', label: 'Stays' },
@@ -18,6 +24,18 @@ export default function Navbar() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const { pathname } = useLocation();
+
+  // Unread message count for the Messages badge; refreshed on each navigation.
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    let cancelled = false;
+    api.get('/messages/inbox')
+      .then((r) => { if (!cancelled) setUnread((r.data ?? []).reduce((n, c) => n + (c.unreadCount || 0), 0)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isAuthenticated, pathname]);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -39,6 +57,7 @@ export default function Navbar() {
     ? [
         ...(role === 'admin' ? [{ to: '/admin', label: 'Admin' }] : []),
         ...(role === 'host' ? [{ to: '/dashboard', label: 'Dashboard' }] : [{ to: '/my-trips', label: 'My trips' }]),
+        { to: '/messages', label: 'Messages', badge: unread },
       ]
     : [];
 
@@ -61,7 +80,7 @@ export default function Navbar() {
             </Link>
           ))}
           {appLinks.map((l) => (
-            <NavLink key={l.to} to={l.to} className={navLinkClass}>{l.label}</NavLink>
+            <NavLink key={l.to} to={l.to} className={navLinkClass}>{l.label}<UnreadBadge count={l.badge} /></NavLink>
           ))}
         </nav>
 
@@ -102,7 +121,7 @@ export default function Navbar() {
           <nav className="page flex flex-col py-3" aria-label="Mobile">
             {[...sectionLinks.map((l) => ({ to: l.href, label: l.label })), ...appLinks].map((l) => (
               <Link key={l.to} to={l.to} onClick={() => setOpen(false)} className="border-b border-line/70 py-3 text-[15px] text-ink last:border-0">
-                {l.label}
+                {l.label}<UnreadBadge count={l.badge} />
               </Link>
             ))}
             <div className="mt-4 flex gap-2 pb-2">

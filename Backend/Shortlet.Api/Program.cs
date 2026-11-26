@@ -93,6 +93,8 @@ builder.Services.AddHostedService<Shortlet.Api.Services.MoneyMaintenanceWorker>(
 
 // Notifications (live + web push), account emails, and calendar sync with Airbnb / Booking.com.
 builder.Services.AddScoped<Shortlet.Api.Services.Notifier>();
+builder.Services.AddScoped<Shortlet.Api.Services.CreditService>();
+builder.Services.AddScoped<Shortlet.Api.Services.BookingPricer>();
 builder.Services.AddScoped<Shortlet.Api.Services.AccountTokenService>();
 builder.Services.AddScoped<Shortlet.Api.Services.CalendarSyncService>();
 builder.Services.AddHostedService<Shortlet.Api.Services.CalendarSyncWorker>();

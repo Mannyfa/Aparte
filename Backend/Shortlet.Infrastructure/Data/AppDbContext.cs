@@ -27,6 +27,10 @@ namespace Shortlet.Infrastructure.Data
         public DbSet<CalendarFeed> CalendarFeeds { get; set; }
         public DbSet<UserToken> UserTokens { get; set; }
         public DbSet<PushSubscription> PushSubscriptions { get; set; }
+        public DbSet<PriceRule> PriceRules { get; set; }
+        public DbSet<SavedProperty> SavedProperties { get; set; }
+        public DbSet<PromoCode> PromoCodes { get; set; }
+        public DbSet<UserCredit> UserCredits { get; set; }
 
 
 
@@ -92,6 +96,14 @@ namespace Shortlet.Infrastructure.Data
             // Webhooks and the payout reconciler look withdrawals up by their payout reference.
             modelBuilder.Entity<Transaction>().HasIndex(t => t.Reference);
             modelBuilder.Entity<Transaction>().Property(t => t.Status).HasDefaultValue("Completed");
+
+            // Referral codes are unique when set (nulls allowed); promo codes are unique.
+            modelBuilder.Entity<User>().HasIndex(u => u.ReferralCode).IsUnique();
+            modelBuilder.Entity<PromoCode>().HasIndex(p => p.Code).IsUnique();
+            modelBuilder.Entity<SavedProperty>().HasIndex(s => new { s.UserId, s.PropertyId }).IsUnique();
+            modelBuilder.Entity<PriceRule>().HasIndex(r => new { r.PropertyId, r.StartDate });
+            modelBuilder.Entity<UserCredit>().HasIndex(c => c.UserId);
+            modelBuilder.Entity<Booking>().HasIndex(b => b.PromoCodeId);
 
             modelBuilder.Entity<Booking>()
                 .HasOne(b => b.Guest)

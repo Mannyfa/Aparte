@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { Calendar, MapPin, KeyRound, Luggage, ArrowRight, Sparkles, ImageOff, Lock, X, Star } from 'lucide-react';
+import { MessageCircle, Calendar, MapPin, KeyRound, Luggage, ArrowRight, Sparkles, ImageOff, Lock, X, Star } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
 import { invalidate } from '../utils/cache';
@@ -87,6 +87,9 @@ function TripCard({ trip, onCancel, onReview }) {
               {canReview(trip) && <button onClick={() => onReview(trip)} className="btn-lime btn-sm flex-1"><Star size={13} /> Leave a review</button>}
               {canCancel(trip) && <button onClick={() => onCancel(trip)} className="btn-ghost btn-sm flex-1 text-red-700 hover:bg-red-50">Cancel booking</button>}
             </div>
+          )}
+          {trip.hostId && (
+            <Link to={`/messages/${trip.hostId}`} className="btn-outline btn-sm mt-3 w-full"><MessageCircle size={13} /> Message host</Link>
           )}
           {trip.hasReviewed && <p className="mt-3 text-center text-xs text-faint">Thanks for your review ★</p>}
         </div>

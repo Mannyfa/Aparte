@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import {
-  MapPin, BadgeCheck, ShieldCheck, X, Plus, Check, Users, ArrowLeft, ArrowRight, Lock, ImageOff, ScrollText, Sparkles,
+  MapPin, BadgeCheck, ShieldCheck, X, Plus, Check, Users, ArrowLeft, ArrowRight, Lock, ImageOff, ScrollText, Sparkles, MessageCircle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO, differenceInCalendarDays, addDays, startOfToday } from 'date-fns';
@@ -9,10 +9,10 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import api, { errorMessage } from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import { Modal, Row } from '../components/ui';
+import { Modal, Row, SaveHeart } from '../components/ui';
 import { PropertyDetailsSkeleton } from '../components/Skeletons';
 import { peek, getCached } from '../utils/cache';
-import { naira, img } from '../utils/format';
+import { naira, img, formatDay } from '../utils/format';
 
 function Gallery({ images, title }) {
   const [active, setActive] = useState(0);
@@ -49,6 +49,55 @@ function Gallery({ images, title }) {
   );
 }
 
+/** Price breakdown from the server quote. */
+function QuoteLines({ quote, error, loading, belowMin, minNights, isAuthenticated, addOns, showTotal = false }) {
+  if (belowMin) return <p className="rounded-lg bg-sand/70 px-3 py-2.5 text-sm text-muted">Minimum stay is {minNights} nights.</p>;
+  if (!isAuthenticated) return <p className="text-sm text-muted">Log in to see the full price for your dates.</p>;
+  if (error) return <p className="rounded-lg bg-sand/70 px-3 py-2.5 text-sm text-red-600">{error}</p>;
+  if (!quote) {
+    return loading ? (
+      <div className="space-y-2" aria-hidden="true"><div className="skeleton h-4 w-full" /><div className="skeleton h-4 w-full" /><div className="skeleton h-4 w-2/3" /></div>
+    ) : null;
+  }
+  if (!quote.available) {
+    return <p className="rounded-lg bg-sand/70 px-3 py-2.5 text-sm text-red-600">Those dates aren’t available. Please choose different dates.</p>;
+  }
+
+  // Group nights that share a price and rule: "₦X × 3 nights  weekend"
+  const groups = [];
+  (quote.nightly || []).forEach((n) => {
+    const existing = groups.find((g) => g.price === n.price && g.rule === n.rule);
+    if (existing) existing.count += 1;
+    else groups.push({ price: n.price, rule: n.rule, count: 1 });
+  });
+
+  return (
+    <div className={`space-y-2 ${loading ? 'opacity-60' : ''}`}>
+      {groups.map((g) => (
+        <Row
+          key={`${g.price}-${g.rule}`}
+          label={<>{naira(g.price)} × {g.count} night{g.count > 1 ? 's' : ''}{g.rule !== 'base' && <span className="chip-neutral ml-2">{g.rule}</span>}</>}
+          value={naira(g.price * g.count)}
+        />
+      ))}
+      <Row label="Room subtotal" value={naira(quote.roomAmount)} />
+      <Row label="Platform fee" value={naira(quote.platformFee)} />
+      {addOns.map((a) => <Row key={a.id} label={`+ ${a.name}`} value={naira(a.price)} />)}
+      {quote.cautionFee > 0 && <Row label="Caution fee · refundable deposit" value={naira(quote.cautionFee)} />}
+      {quote.promo?.valid && quote.promo.discount > 0 && <Row label={`Promo ${quote.promo.code}`} value={`- ${naira(quote.promo.discount)}`} />}
+      {quote.credit?.applied > 0 && <Row label="Referral credit applied" value={`- ${naira(quote.credit.applied)}`} />}
+      {showTotal ? (
+        <div className="mt-3 flex items-center justify-between rounded-xl bg-ink px-4 py-3 text-cream">
+          <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-cream/70">Total</span>
+          <span className="mono text-lg">{naira(quote.total)}</span>
+        </div>
+      ) : (
+        <Row label="Total" value={naira(quote.total)} strong className="border-t border-line pt-3" />
+      )}
+    </div>
+  );
+}
+
 export default function PropertyDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -78,6 +127,12 @@ export default function PropertyDetails() {
   // Apartey Split
   const [isSplit, setIsSplit] = useState(false);
   const [splitWays, setSplitWays] = useState(2);
+
+  // Server quote (all price maths happens on the server)
+  const [promoInput, setPromoInput] = useState('');
+  const [promoCode, setPromoCode] = useState('');
+  const [useCredit, setUseCredit] = useState(false);
+  const [quoteState, setQuoteState] = useState({ key: '', data: null, error: '' });
 
   useEffect(() => {
     const fetchPropertyAndDates = async () => {
@@ -109,6 +164,51 @@ export default function PropertyDetails() {
 
   const nights = checkIn && checkOut ? Math.max(0, differenceInCalendarDays(checkOut, checkIn)) : 0;
 
+  const minNights = property?.minNights || 1;
+  const belowMin = nights > 0 && nights < minNights;
+  const addOnKey = selectedAddOns.map((a) => a.id).join(',');
+  const quoteKey = isAuthenticated && checkIn && checkOut && nights > 0 && !belowMin
+    ? [id, format(checkIn, 'yyyy-MM-dd'), format(checkOut, 'yyyy-MM-dd'), addOnKey, promoCode, useCredit].join('|')
+    : '';
+
+  // Debounced server quote; re-runs when dates, add-ons, promo or credit change.
+  useEffect(() => {
+    if (!quoteKey) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          propertyId: id,
+          checkIn: format(checkIn, 'yyyy-MM-dd'),
+          checkOut: format(checkOut, 'yyyy-MM-dd'),
+          useCredit: String(useCredit),
+        });
+        addOnKey.split(',').filter(Boolean).forEach((a) => params.append('addOnIds', a));
+        if (promoCode) params.append('promoCode', promoCode);
+        const { data } = await api.get(`/Bookings/quote?${params.toString()}`);
+        if (!cancelled) setQuoteState({ key: quoteKey, data, error: '' });
+      } catch (error) {
+        if (!cancelled) setQuoteState({ key: quoteKey, data: null, error: errorMessage(error, 'Could not price this stay.') });
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+    // checkIn/checkOut/addOns/promo/credit are all captured through quoteKey
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey]);
+
+  const quoteReady = !!quoteKey && quoteState.key === quoteKey;
+  const quote = quoteReady ? quoteState.data : null;
+  const quoteError = quoteReady ? quoteState.error : '';
+  const quoteLoading = !!quoteKey && !quoteReady;
+  const canBook = !!quote?.available && !belowMin;
+
+  const applyPromo = () => setPromoCode(promoInput.trim().toUpperCase());
+
+  const handleMessageHost = () => {
+    if (!isAuthenticated) return navigate('/login', { state: { from: location.pathname } });
+    navigate(`/messages/${property.hostId}`);
+  };
+
   // Check-out can't go past the next booked night.
   const maxCheckOutDate = checkIn
     ? bookedDates.filter((d) => d > checkIn).sort((a, b) => a - b)[0] ?? null
@@ -121,6 +221,7 @@ export default function PropertyDetails() {
     }
     if (user?.role === 'host') return toast.error('Host accounts can’t make bookings. Log in with a guest account.');
     if (nights <= 0) return toast.error('Choose your check-in and check-out dates.');
+    if (belowMin) return toast.error(`Minimum stay is ${minNights} nights.`);
     setIsCheckoutModalOpen(true);
   };
 
@@ -138,6 +239,8 @@ export default function PropertyDetails() {
         addOnIds: selectedAddOns.map((a) => a.id),
         isSplit,
         splitWays: isSplit ? splitWays : 1,
+        promoCode: promoCode || undefined,
+        useCredit,
       };
       const response = await api.post('/Bookings', payload);
 
@@ -157,12 +260,9 @@ export default function PropertyDetails() {
   if (loading) return <PropertyDetailsSkeleton />;
   if (!property) return null;
 
-  const totalRoomPrice = property.pricePerNight * nights;
-  const platformFee = Math.round(totalRoomPrice * 0.05 * 100) / 100;
   const cautionFee = property.cautionFee || 0;
-  const addOnsTotal = selectedAddOns.reduce((sum, a) => sum + a.price, 0);
-  const finalPrice = totalRoomPrice + platformFee + cautionFee + addOnsTotal;
-  const splitAmount = isSplit ? finalPrice / splitWays : finalPrice;
+  const splitAmount = quote ? quote.total / splitWays : 0;
+  const isHost = !!user?.id && !!property.hostId && String(user.id).toLowerCase() === String(property.hostId).toLowerCase();
   const location_ = [property.area, property.city, property.state].filter(Boolean).join(', ');
 
   return (
@@ -184,10 +284,13 @@ export default function PropertyDetails() {
             )}
           </p>
         </div>
-        <p className="shrink-0 md:text-right">
-          <span className="mono text-2xl">{naira(property.pricePerNight)}</span>
-          <span className="text-sm text-faint"> / night</span>
-        </p>
+        <div className="flex shrink-0 items-center justify-between gap-4 md:justify-end">
+          <p className="md:text-right">
+            <span className="mono text-2xl">{naira(property.pricePerNight)}</span>
+            <span className="text-sm text-faint"> / night</span>
+          </p>
+          <SaveHeart propertyId={property.id} className="border border-line" />
+        </div>
       </div>
 
       <Gallery images={property.imageUrls} title={property.title} />
@@ -205,7 +308,39 @@ export default function PropertyDetails() {
                 {property.hostVerificationStatus === 'Verified' ? 'Identity verified by Apartey' : 'Identity not yet verified'}
               </p>
             </div>
+            {!isHost && property.hostId && (
+              <button type="button" onClick={handleMessageHost} className="btn-outline btn-sm ml-auto shrink-0">
+                <MessageCircle size={14} /> Message host
+              </button>
+            )}
           </div>
+
+          <section>
+            <p className="eyebrow mb-3">Pricing</p>
+            <ul className="divide-y divide-line rounded-2xl border border-line bg-paper text-sm">
+              <li className="flex justify-between gap-4 px-4 py-3"><span className="text-muted">Standard price</span><span className="mono">{naira(property.pricePerNight)}</span></li>
+              {property.weekendPricePerNight > 0 && (
+                <li className="flex justify-between gap-4 px-4 py-3"><span className="text-muted">Weekend price (Fri, Sat)</span><span className="mono">{naira(property.weekendPricePerNight)}</span></li>
+              )}
+              <li className="flex justify-between gap-4 px-4 py-3"><span className="text-muted">Minimum stay</span><span className="mono">{minNights} night{minNights === 1 ? '' : 's'}</span></li>
+            </ul>
+            {property.priceRules?.length > 0 && (
+              <div className="mt-4">
+                <p className="mb-2 text-sm font-medium">Seasonal prices</p>
+                <ul className="divide-y divide-line rounded-2xl border border-line bg-paper text-sm">
+                  {property.priceRules.map((r) => (
+                    <li key={r.id} className="flex items-baseline justify-between gap-4 px-4 py-3">
+                      <span className="min-w-0 text-muted">
+                        {r.label ? <span className="text-ink">{r.label} · </span> : null}
+                        {formatDay(r.startDate, { day: 'numeric', month: 'short' })} to {formatDay(r.endDate, { day: 'numeric', month: 'short', year: 'numeric' })}
+                      </span>
+                      <span className="mono shrink-0">{naira(r.nightlyPrice)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </section>
 
           {property.description && (
             <section>
@@ -331,15 +466,15 @@ export default function PropertyDetails() {
             </div>
 
             {nights > 0 && (
-              <div className="mt-5 space-y-2 animate-fade-in">
-                <Row label={`${naira(property.pricePerNight)} × ${nights} night${nights > 1 ? 's' : ''}`} value={naira(totalRoomPrice)} />
-                <Row label="Platform fee (5%)" value={naira(platformFee)} />
-                {cautionFee > 0 && <Row label="Caution fee · refundable" value={naira(cautionFee)} />}
-                <Row label="Total before add-ons" value={naira(totalRoomPrice + platformFee + cautionFee)} strong className="border-t border-line pt-3" />
+              <div className="mt-5 animate-fade-in">
+                <QuoteLines
+                  quote={quote} error={quoteError} loading={quoteLoading} belowMin={belowMin} minNights={minNights}
+                  isAuthenticated={isAuthenticated} addOns={selectedAddOns}
+                />
               </div>
             )}
 
-            <button onClick={handleInitiateCheckout} disabled={nights <= 0} className="btn-ink btn-lg mt-5 w-full">
+            <button onClick={handleInitiateCheckout} disabled={nights <= 0 || belowMin || (isAuthenticated && !canBook)} className="btn-ink btn-lg mt-5 w-full">
               {nights > 0 ? <>Continue <ArrowRight size={16} /></> : 'Select dates'}
             </button>
             <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-faint">
@@ -370,15 +505,11 @@ export default function PropertyDetails() {
                 <span className="chip-neutral">{nights} night{nights > 1 ? 's' : ''}</span>
               </div>
             )}
-            <div className="mt-6 space-y-2">
-              <Row label={`${naira(property.pricePerNight)} × ${nights}`} value={naira(totalRoomPrice)} />
-              <Row label="Platform fee (5%)" value={naira(platformFee)} />
-              {cautionFee > 0 && <Row label="Caution fee · escrow" value={naira(cautionFee)} />}
-              {selectedAddOns.map((a) => <Row key={a.id} label={`+ ${a.name}`} value={naira(a.price)} />)}
-            </div>
-            <div className="mt-5 flex items-center justify-between rounded-xl bg-ink px-4 py-3 text-cream">
-              <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-cream/70">Total</span>
-              <span className="mono text-lg">{naira(finalPrice)}</span>
+            <div className="mt-6">
+              <QuoteLines
+                quote={quote} error={quoteError} loading={quoteLoading} belowMin={belowMin} minNights={minNights}
+                isAuthenticated={isAuthenticated} addOns={selectedAddOns} showTotal
+              />
             </div>
             {isSplit && (
               <p className="mt-3 text-right text-xs text-muted">
@@ -425,6 +556,49 @@ export default function PropertyDetails() {
               </>
             )}
 
+            {/* Promo code */}
+            <div className="mt-6">
+              <p className="eyebrow mb-3">Promo code</p>
+              <div className="flex gap-2">
+                <input
+                  value={promoInput}
+                  onChange={(e) => setPromoInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyPromo(); } }}
+                  placeholder="Enter code"
+                  aria-label="Promo code"
+                  autoCapitalize="characters"
+                  className="min-w-0 flex-1 rounded-lg border border-line bg-paper px-3 py-2.5 text-sm uppercase outline-none placeholder:normal-case placeholder:text-faint focus:border-ink"
+                />
+                <button type="button" onClick={applyPromo} className="btn-outline">Apply</button>
+              </div>
+              {quote?.promo && (
+                <p className={`mt-2 text-xs ${quote.promo.valid ? 'text-lime-deep' : 'text-red-600'}`}>
+                  {quote.promo.message || (quote.promo.valid ? `${quote.promo.code} applied` : 'This code can’t be used.')}
+                </p>
+              )}
+            </div>
+
+            {/* Referral credit */}
+            {isAuthenticated && (
+              <div className="mt-4 flex items-center justify-between gap-4 rounded-xl border border-line p-4">
+                <div>
+                  <p className="text-sm font-medium">Use my credit</p>
+                  <p className="text-xs text-muted">Balance <span className="mono text-ink">{naira(quote?.credit?.balance ?? 0)}</span></p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={useCredit}
+                  aria-label="Use my credit"
+                  disabled={quote ? !(quote.credit?.balance > 0) : false}
+                  onClick={() => setUseCredit(!useCredit)}
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${useCredit ? 'bg-ink' : 'bg-line'}`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-paper shadow transition-all ${useCredit ? 'left-[22px] bg-lime' : 'left-0.5'}`} />
+                </button>
+              </div>
+            )}
+
             {/* Split */}
             <div className="mt-6 rounded-xl border border-line p-4">
               <div className="flex items-center justify-between gap-4">
@@ -459,12 +633,12 @@ export default function PropertyDetails() {
             </div>
 
             <div className="mt-auto pt-6">
-              <button onClick={handleConfirmBooking} disabled={bookingLoading} className="btn-lime btn-lg w-full">
+              <button onClick={handleConfirmBooking} disabled={bookingLoading || !canBook || quoteLoading} className="btn-lime btn-lg w-full">
                 {bookingLoading
                   ? 'Processing…'
                   : isSplit
                     ? <>Create split group <ArrowRight size={16} /></>
-                    : <>Pay {naira(finalPrice)} <ArrowRight size={16} /></>}
+                    : <>Pay {quote ? naira(quote.total) : ''} <ArrowRight size={16} /></>}
               </button>
               <p className="mt-3 flex items-center justify-center gap-1.5 text-xs text-faint">
                 <Lock size={12} /> Secure payment via Paystack

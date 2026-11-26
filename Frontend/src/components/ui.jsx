@@ -1,5 +1,9 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React, { useContext, useEffect, useSyncExternalStore } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Heart } from 'lucide-react';
+import toast from 'react-hot-toast';
+import api, { errorMessage } from '../utils/api';
+import { AuthContext } from '../context/AuthContext';
 
 /** Lime square mark + wordmark. */
 export function Logo({ to = '/', inverted = false }) {
@@ -121,4 +125,77 @@ export function CautionChip({ status }) {
   const entry = CAUTION[status];
   if (!entry) return null;
   return <span className={entry[0]}>{entry[1]}</span>;
+}
+
+/* ---------- Saved stays: one shared store so cards never refetch the ids ---------- */
+let savedIds = new Set();
+let savedToken = null; // token the ids were loaded for
+let savedLoading = false;
+const savedListeners = new Set();
+const emitSaved = () => savedListeners.forEach((fn) => fn());
+const subscribeSaved = (fn) => { savedListeners.add(fn); return () => savedListeners.delete(fn); };
+const getSavedSnapshot = () => savedIds;
+
+function loadSavedIds(token) {
+  if (savedToken === token || savedLoading) return;
+  savedLoading = true;
+  api.get('/saved/ids')
+    .then(({ data }) => { savedIds = new Set((data || []).map((x) => String(x).toLowerCase())); savedToken = token; })
+    .catch(() => { savedToken = token; }) // don't retry in a loop; hearts start outline
+    .finally(() => { savedLoading = false; emitSaved(); });
+}
+
+function setSavedLocal(id, saved) {
+  const next = new Set(savedIds);
+  if (saved) next.add(id); else next.delete(id);
+  savedIds = next;
+  emitSaved();
+}
+
+/** Heart toggle for saving a stay. Sits on cards and the property page. */
+export function SaveHeart({ propertyId, className = '', onChange }) {
+  const { token } = useContext(AuthContext);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const ids = useSyncExternalStore(subscribeSaved, getSavedSnapshot);
+  const key = String(propertyId).toLowerCase();
+
+  useEffect(() => {
+    if (token) loadSavedIds(token);
+    else if (savedToken) { savedIds = new Set(); savedToken = null; emitSaved(); }
+  }, [token]);
+
+  const saved = !!token && ids.has(key);
+
+  const toggle = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!token) {
+      toast('Log in to save stays.');
+      return navigate('/login', { state: { from: location.pathname } });
+    }
+    const next = !saved;
+    setSavedLocal(key, next);
+    onChange?.(next);
+    try {
+      if (next) await api.post(`/saved/${propertyId}`);
+      else await api.delete(`/saved/${propertyId}`);
+    } catch (error) {
+      setSavedLocal(key, !next);
+      onChange?.(!next);
+      toast.error(errorMessage(error, 'Could not update your saved stays.'));
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-label={saved ? 'Remove from saved stays' : 'Save this stay'}
+      aria-pressed={saved}
+      className={`grid h-11 w-11 place-items-center rounded-full bg-paper/90 text-ink shadow-soft transition hover:bg-paper ${className}`}
+    >
+      <Heart size={18} className={saved ? 'fill-red-500 text-red-500' : ''} />
+    </button>
+  );
 }

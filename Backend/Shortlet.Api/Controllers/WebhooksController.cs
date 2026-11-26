@@ -204,9 +204,8 @@ namespace Shortlet.Api.Controllers
                     if (booking.CautionFeeAmount > 0) booking.CautionFeeStatus = "Held";
 
                     decimal addOnsTotal = await _context.BookingAddOns.Where(a => a.BookingId == booking.Id).SumAsync(a => a.Price);
-                    // Room + 5% fee = total − caution − add-ons. The host keeps the room rate and 100% of add-ons.
-                    decimal roomWithFee = booking.TotalPrice - booking.CautionFeeAmount - addOnsTotal;
-                    decimal hostEarnings = Math.Round(roomWithFee / (1 + BookingRules.PlatformFeeRate) + addOnsTotal, 2);
+                    // The host keeps the room rate and 100% of add-ons; discounts come out of the platform fee only.
+                    decimal hostEarnings = BookingMoney.HostEarnings(booking, addOnsTotal);
 
                     var wallet = await WalletLedger.LockWalletAsync(_context, booking.Property.HostId);
                     wallet.Balance += hostEarnings;

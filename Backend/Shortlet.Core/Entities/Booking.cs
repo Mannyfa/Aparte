@@ -17,6 +17,15 @@ namespace Shortlet.Core.Entities
         public decimal TotalPrice { get; set; }
         public decimal ServiceFee { get; set; }
 
+        /// <summary>Promo code applied at checkout, if any.</summary>
+        public Guid? PromoCodeId { get; set; }
+        /// <summary>Promo discount taken off the platform fee.</summary>
+        public decimal PromoDiscount { get; set; } = 0;
+        /// <summary>Referral credit applied at checkout, taken off the platform fee.</summary>
+        public decimal CreditApplied { get; set; } = 0;
+        /// <summary>Sum of nightly prices for the stay. 0 means a legacy booking made before this was stored.</summary>
+        public decimal RoomAmount { get; set; } = 0;
+
         public string? CheckInCode { get; set; }
         
         // pending, split_pending, paid, confirmed, completed, rejected, cancelled, expired, failed
