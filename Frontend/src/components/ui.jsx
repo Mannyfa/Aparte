@@ -98,7 +98,7 @@ export function Modal({ open, onClose, title, children, wide = false }) {
       aria-label={title}
     >
       <div
-        className={`max-h-[92vh] w-full overflow-y-auto rounded-t-2xl border border-line bg-paper shadow-lift animate-fade-up sm:rounded-2xl ${wide ? 'sm:max-w-4xl' : 'sm:max-w-md'}`}
+        className={`max-h-[92vh] w-full overflow-y-auto pb-safe rounded-t-2xl border border-line bg-paper shadow-lift animate-fade-up sm:rounded-2xl ${wide ? 'sm:max-w-4xl' : 'sm:max-w-md'}`}
         onClick={(e) => e.stopPropagation()}
       >
         {children}

@@ -110,3 +110,17 @@
 }
 @keyframes skeleton-sweep { 100% { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .skeleton::after { animation: none; } }
+
+/* iPhone home-screen app: keep content clear of the home indicator / rounded corners */
+@layer utilities {
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+  .pt-safe { padding-top: env(safe-area-inset-top); }
+}
+@supports (padding: max(0px)) {
+  body { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+}
+/* Installed app: no rubber-band overscroll revealing blank space, no grey tap flashes */
+@media (display-mode: standalone) {
+  html, body { overscroll-behavior-y: none; }
+}
+html { -webkit-tap-highlight-color: transparent; }

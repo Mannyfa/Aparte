@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#F2F1EA" />
+  <title>Apartey — Offline</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+           background: #F2F1EA; color: #16160F; font: 16px/1.5 Geist, Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; }
+    .mark { width: 56px; height: 56px; border-radius: 14px; background: #D4F24A; display: grid; place-items: center; margin: 0 auto 24px; }
+    .eyebrow { font: 11px ui-monospace, Menlo, monospace; letter-spacing: .08em; text-transform: uppercase; color: #5A6B0F; margin: 0 0 12px; }
+    h1 { font-weight: 300; letter-spacing: -0.035em; font-size: 36px; line-height: 1.1; margin: 0; }
+    p { color: #5A5949; max-width: 320px; margin: 12px auto 0; }
+    button { margin-top: 28px; border: 0; border-radius: 10px; background: #16160F; color: #F2F1EA; font: inherit; font-size: 15px; padding: 12px 20px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="28" height="28"><path d="M6 25V14L16 6l10 8v11h-6.5v-6.5h-7V25z" fill="#16160F"/></svg>
+    </div>
+    <p class="eyebrow">You're offline</p>
+    <h1>No connection right now.</h1>
+    <p>Apartey needs the internet to show stays and take payments. Check your connection and try again.</p>
+    <button onclick="location.reload()">Try again</button>
+  </main>
+</body>
+</html>

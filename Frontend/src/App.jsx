@@ -5,6 +5,7 @@ import { Toaster } from 'react-hot-toast';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import NotificationListener from './components/NotificationListener';
+import InstallPrompt from './components/InstallPrompt';
 
 import Login from './pages/Login';
 import Home from './pages/Home';
@@ -61,6 +62,7 @@ function Shell() {
         }}
       />
       <NotificationListener />
+      <InstallPrompt />
       <Navbar />
       <main className="flex-grow">
         <Routes>

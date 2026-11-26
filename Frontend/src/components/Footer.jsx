@@ -51,7 +51,7 @@ export default function Footer() {
           </div>
         ))}
       </div>
-      <div className="border-t border-line">
+      <div className="border-t border-line pb-safe">
         <div className="page flex flex-col gap-2 py-6 text-xs text-faint sm:flex-row sm:items-center sm:justify-between">
           <p>© {new Date().getFullYear()} Apartey. All rights reserved.</p>
           <p className="font-mono uppercase tracking-[0.08em]">Payments secured by Paystack</p>
