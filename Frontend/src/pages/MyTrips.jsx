@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { Calendar, MapPin, KeyRound, Luggage, ArrowRight, Sparkles, ImageOff } from 'lucide-react';
+import { Calendar, MapPin, KeyRound, Luggage, ArrowRight, Sparkles, ImageOff, Lock } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import { Loader, EmptyState, StatusBadge } from '../components/ui';
-import { naira, formatDay, nightsBetween } from '../utils/format';
+import { EmptyState, StatusBadge, CautionChip } from '../components/ui';
+import { TripGridSkeleton } from '../components/Skeletons';
+import { naira, formatDay, nightsBetween, img } from '../utils/format';
 
 const UPCOMING = ['pending', 'split_pending', 'paid', 'confirmed'];
 
@@ -15,7 +16,7 @@ function TripCard({ trip }) {
     <article className="card flex flex-col overflow-hidden">
       <div className="relative aspect-[16/9] bg-sand">
         {trip.imageUrl ? (
-          <img src={trip.imageUrl} alt={trip.propertyTitle} className="h-full w-full object-cover" />
+          <img src={img(trip.imageUrl, 640)} alt={trip.propertyTitle} loading="lazy" decoding="async" className="h-full w-full object-cover" />
         ) : (
           <div className="grid h-full place-items-center text-faint"><ImageOff size={20} /></div>
         )}
@@ -39,6 +40,28 @@ function TripCard({ trip }) {
           </div>
         )}
 
+        {trip.cautionFee > 0 && ['Held', 'Releasing', 'Refunded', 'Claimed', 'PartlyClaimed'].includes(trip.cautionFeeStatus) && (
+          <div className="mt-4 rounded-lg bg-sand/70 px-3 py-2.5 text-xs">
+            <p className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-muted"><Lock size={12} /> Caution fee <span className="mono text-ink">{naira(trip.cautionFee)}</span></span>
+              <CautionChip status={trip.cautionFeeStatus} />
+            </p>
+            {trip.cautionFeeStatus === 'Held' && <p className="mt-1 text-faint">Held in escrow. It comes back to you after check-out unless the host reports damage.</p>}
+            {(trip.cautionFeeStatus === 'Claimed' || trip.cautionFeeStatus === 'PartlyClaimed') && (
+              <p className="mt-1 text-muted">
+                Host kept <span className="mono text-ink">{naira(trip.cautionClaimAmount)}</span>: {trip.cautionClaimReason}
+                {trip.cautionFee > trip.cautionClaimAmount && <> · <span className="mono text-ink">{naira(trip.cautionFee - trip.cautionClaimAmount)}</span> refunded</>}
+              </p>
+            )}
+          </div>
+        )}
+
+        {trip.status === 'split_pending' && trip.splitGroupId && (
+          <Link to={`/split-success/${trip.splitGroupId}`} className="btn-outline btn-sm mt-4 self-start">
+            Open group payment <ArrowRight size={14} />
+          </Link>
+        )}
+
         <div className="mt-auto pt-5">
           {trip.status === 'confirmed' && trip.checkInCode ? (
             <div className="flex items-center justify-between rounded-xl bg-ink px-4 py-3 text-cream">
@@ -48,7 +71,7 @@ function TripCard({ trip }) {
           ) : (
             <div className="flex items-center justify-between border-t border-line pt-4">
               <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-faint">
-                {trip.status === 'paid' ? 'Paid · waiting for host' : trip.status === 'rejected' ? 'Refunded' : 'Total'}
+                {trip.status === 'paid' ? 'Paid · waiting for host' : ['rejected', 'cancelled', 'expired'].includes(trip.status) ? 'Refunded' : 'Total'}
               </span>
               <span className="mono">{naira(trip.totalPrice)}</span>
             </div>
@@ -112,7 +135,7 @@ export default function MyTrips() {
       </div>
 
       {loading ? (
-        <Loader label="Loading trips" />
+        <TripGridSkeleton count={3} />
       ) : shown.length === 0 ? (
         <EmptyState
           icon={Luggage}

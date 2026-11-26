@@ -61,12 +61,21 @@ namespace Shortlet.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<decimal>("CautionClaimAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("CautionClaimReason")
+                        .HasColumnType("text");
+
                     b.Property<decimal>("CautionFeeAmount")
                         .HasColumnType("numeric");
 
                     b.Property<string>("CautionFeeStatus")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTime?>("CautionResolvedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime>("CheckIn")
                         .HasColumnType("timestamp with time zone");
@@ -107,7 +116,7 @@ namespace Shortlet.Infrastructure.Migrations
                     b.HasIndex("PaymentReference")
                         .IsUnique();
 
-                    b.HasIndex("PropertyId");
+                    b.HasIndex("PropertyId", "CheckOut");
 
                     b.ToTable("Bookings");
                 });
@@ -259,6 +268,8 @@ namespace Shortlet.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CreatedAt");
+
                     b.HasIndex("HostId");
 
                     b.ToTable("Properties");
@@ -339,6 +350,52 @@ namespace Shortlet.Infrastructure.Migrations
                     b.HasIndex("PropertyId");
 
                     b.ToTable("PropertyImages");
+                });
+
+            modelBuilder.Entity("Shortlet.Core.Entities.Refund", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("BookingId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TransactionReference")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BookingId");
+
+                    b.HasIndex("TransactionReference", "Purpose")
+                        .IsUnique();
+
+                    b.ToTable("Refunds");
                 });
 
             modelBuilder.Entity("Shortlet.Core.Entities.Review", b =>
@@ -451,6 +508,12 @@ namespace Shortlet.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("Completed");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasColumnType("text");
@@ -459,6 +522,8 @@ namespace Shortlet.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Reference");
 
                     b.HasIndex("WalletId");
 

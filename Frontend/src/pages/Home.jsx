@@ -5,11 +5,13 @@ import {
   Users, ConciergeBell, BadgeCheck, Bell, Lock, RotateCcw, CreditCard, Map as MapIcon, LayoutGrid,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api, { errorMessage } from '../utils/api';
+import { errorMessage } from '../utils/api';
+import { peek, getCached, prefetch } from '../utils/cache';
 import { AuthContext } from '../context/AuthContext';
 import PropertyMap from '../components/PropertyMap';
-import { Loader, EmptyState, SectionHeader } from '../components/ui';
-import { naira } from '../utils/format';
+import { EmptyState, SectionHeader } from '../components/ui';
+import { PropertyGridSkeleton } from '../components/Skeletons';
+import { naira, img } from '../utils/format';
 
 const PROPERTY_TYPES = ['Apartment', 'Penthouse', 'Duplex', 'Studio'];
 
@@ -26,11 +28,11 @@ const FAQS = [
   },
   {
     q: 'What is the caution fee?',
-    a: 'Some hosts ask for a refundable caution fee. It’s held in escrow by Apartey, not paid to the host, and is returned if no damage is reported.',
+    a: 'Some hosts ask for a refundable caution fee. It’s held in escrow by Apartey, not paid to the host. After check-out the host has 72 hours to report damage; otherwise it’s refunded to you automatically.',
   },
   {
     q: 'How does Apartey Split work?',
-    a: 'Turn on Split at checkout and choose 2–5 people. You get a group page with a payment link per person. The booking goes to the host once every share is paid. The group has 24 hours to finish.',
+    a: 'Turn on Split at checkout and choose 2–5 people. You get a group page with a payment link per person. The booking goes to the host once every share is paid. If the group doesn’t finish within 24 hours, everyone who paid is refunded automatically.',
   },
   {
     q: 'What happens if the host declines?',
@@ -94,17 +96,26 @@ function BookingPreview() {
 
 /* ---------- Listing card ---------- */
 function PropertyCard({ property, onOpen }) {
+  // Start loading the property page as soon as someone shows interest, so it opens instantly.
+  const warm = () => {
+    prefetch(`/Properties/${property.id}`);
+    prefetch(`/Properties/${property.id}/booked-dates`);
+  };
   return (
     <button
       onClick={onOpen}
+      onMouseEnter={warm}
+      onFocus={warm}
+      onTouchStart={warm}
       className="group flex flex-col overflow-hidden rounded-2xl border border-line bg-paper text-left transition-shadow hover:shadow-lift"
     >
       <div className="relative aspect-[4/3] overflow-hidden bg-sand">
         {property.imageUrls?.length > 0 ? (
           <img
-            src={property.imageUrls[0]}
+            src={img(property.imageUrls[0], 640)}
             alt={property.title}
             loading="lazy"
+            decoding="async"
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
           />
         ) : (
@@ -149,9 +160,19 @@ function FaqItem({ q, a, open, onToggle }) {
   );
 }
 
+const searchUrl = ({ page, searchTerm, filterType, maxPrice }) => {
+  const params = new URLSearchParams({ page, pageSize: 6 });
+  if (searchTerm) params.append('searchTerm', searchTerm);
+  if (filterType) params.append('type', filterType);
+  if (maxPrice) params.append('maxPrice', maxPrice);
+  return `/Properties/search?${params.toString()}`;
+};
+
 export default function Home() {
-  const [properties, setProperties] = useState([]);
-  const [loading, setLoading] = useState(true);
+  // Coming back to the home page shows the last results instantly (then refreshes quietly).
+  const initial = peek(searchUrl({ page: 1 }));
+  const [properties, setProperties] = useState(initial?.data ?? []);
+  const [loading, setLoading] = useState(!initial);
   const [viewMode, setViewMode] = useState('grid');
   const [openFaq, setOpenFaq] = useState(0);
 
@@ -160,26 +181,27 @@ export default function Home() {
   const [filterType, setFilterType] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(initial?.totalPages ?? 1);
+  const [totalItems, setTotalItems] = useState(initial?.totalItems ?? 0);
 
   const { user } = useContext(AuthContext);
   const navigate = useNavigate();
 
-  const fetchProperties = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ page, pageSize: 6 });
-      if (searchTerm) params.append('searchTerm', searchTerm);
-      if (filterType) params.append('type', filterType);
-      if (maxPrice) params.append('maxPrice', maxPrice);
+  const show = (result) => {
+    setProperties(result.data);
+    setTotalPages(result.totalPages);
+    setTotalItems(result.totalItems);
+  };
 
-      const response = await api.get(`/Properties/search?${params.toString()}`);
-      setProperties(response.data.data);
-      setTotalPages(response.data.totalPages);
-      setTotalItems(response.data.totalItems);
+  const fetchProperties = async () => {
+    const url = searchUrl({ page, searchTerm, filterType, maxPrice });
+    const cached = peek(url);
+    if (cached) show(cached); // instant, then refresh below if it's stale
+    else setLoading(true);
+    try {
+      show(await getCached(url));
     } catch (error) {
-      toast.error(errorMessage(error, 'Failed to load stays.'));
+      if (!cached) toast.error(errorMessage(error, 'Failed to load stays.'));
     } finally {
       setLoading(false);
     }
@@ -289,7 +311,7 @@ export default function Home() {
           </div>
 
           {loading ? (
-            <Loader label="Finding stays" />
+            <PropertyGridSkeleton count={6} />
           ) : properties.length === 0 ? (
             <EmptyState icon={Search} title="No stays match that search">
               Try a nearby area, a different property type, or a higher budget.

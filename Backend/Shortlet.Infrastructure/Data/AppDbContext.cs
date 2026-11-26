@@ -23,6 +23,7 @@ namespace Shortlet.Infrastructure.Data
         public DbSet<BookingAddOn> BookingAddOns { get; set; }
         public DbSet<SplitGroup> SplitGroups { get; set; }
         public DbSet<SplitShare> SplitShares { get; set; }
+        public DbSet<Refund> Refunds { get; set; }
 
 
 
@@ -61,6 +62,20 @@ namespace Shortlet.Infrastructure.Data
                 .WithMany()
                 .HasForeignKey(b => b.PropertyId)
                 .OnDelete(DeleteBehavior.Restrict); // Prevent deleting properties that have bookings
+
+            // Listings are shown newest first; booked dates are looked up per property by check-out date.
+            modelBuilder.Entity<Property>().HasIndex(p => p.CreatedAt);
+            modelBuilder.Entity<Booking>().HasIndex(b => new { b.PropertyId, b.CheckOut });
+
+            // A payment is refunded at most once per purpose (full booking refund vs. caution return).
+            modelBuilder.Entity<Refund>()
+                .HasIndex(r => new { r.TransactionReference, r.Purpose })
+                .IsUnique();
+            modelBuilder.Entity<Refund>().HasIndex(r => r.BookingId);
+
+            // Webhooks and the payout reconciler look withdrawals up by their payout reference.
+            modelBuilder.Entity<Transaction>().HasIndex(t => t.Reference);
+            modelBuilder.Entity<Transaction>().Property(t => t.Status).HasDefaultValue("Completed");
 
             modelBuilder.Entity<Booking>()
                 .HasOne(b => b.Guest)

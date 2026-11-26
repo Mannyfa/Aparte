@@ -4,7 +4,8 @@ import { ExternalLink, Check, X, Inbox } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import { Loader, EmptyState } from '../components/ui';
+import { EmptyState } from '../components/ui';
+import { ListSkeleton } from '../components/Skeletons';
 import { formatDay, initials } from '../utils/format';
 
 export default function AdminDashboard() {
@@ -59,7 +60,7 @@ export default function AdminDashboard() {
       </div>
 
       {loading ? (
-        <Loader label="Loading queue" />
+        <ListSkeleton rows={4} label="Loading verification queue" />
       ) : pendingHosts.length === 0 ? (
         <EmptyState icon={Inbox} title="Nothing to review">All submitted documents have been handled.</EmptyState>
       ) : (

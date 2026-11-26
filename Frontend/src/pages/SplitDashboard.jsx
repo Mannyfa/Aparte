@@ -3,7 +3,8 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Users, Copy, Check, Clock, Lock, ArrowRight, MessageCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
-import { Loader, Modal } from '../components/ui';
+import { Modal } from '../components/ui';
+import { SplitSkeleton } from '../components/Skeletons';
 import { naira, formatDay } from '../utils/format';
 
 function timeLeft(expiresAt) {
@@ -95,7 +96,7 @@ export default function SplitDashboard() {
     }
   };
 
-  if (loading) return <Loader label="Loading group" />;
+  if (loading) return <SplitSkeleton />;
   if (!splitData) return null;
 
   const { status } = splitData;
@@ -133,7 +134,7 @@ export default function SplitDashboard() {
           ) : isOpen ? (
             <p className="flex items-center gap-2 text-muted"><Clock size={15} /> Waiting for the remaining shares · <span className="mono text-ink">{timeLeft(splitData.expiresAt)}</span></p>
           ) : (
-            <p className="flex items-center gap-2 text-red-700"><X size={15} /> This group {status === 'Expired' ? 'expired before everyone paid' : 'was cancelled'}. The host can decline the booking to refund anyone who paid.</p>
+            <p className="flex items-center gap-2 text-red-700"><X size={15} /> This group {status === 'Expired' ? 'expired before everyone paid' : 'was cancelled'}. Anyone who paid is being refunded automatically.</p>
           )}
         </div>
       </div>

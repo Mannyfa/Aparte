@@ -2,14 +2,15 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard, Home as HomeIcon, ClipboardList, Wallet, ShieldCheck, Plus, Upload, Check, X, RefreshCw,
-  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff,
+  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff, Lock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import BrandLoader from '../components/BrandLoader';
-import { EmptyState, StatusBadge, Modal } from '../components/ui';
-import { naira, formatDay, nightsBetween, initials } from '../utils/format';
+import { OverviewSkeleton, ListingCardsSkeleton, ListSkeleton, WalletSkeleton, Bone } from '../components/Skeletons';
+import { EmptyState, StatusBadge, Modal, CautionChip } from '../components/ui';
+import { naira, formatDay, formatDateTime, nightsBetween, initials, img } from '../utils/format';
+import { invalidate } from '../utils/cache';
 
 function PageHead({ eyebrow, title, lead, action }) {
   return (
@@ -62,6 +63,14 @@ export default function Dashboard() {
 
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
   const [withdrawData, setWithdrawData] = useState({ amount: '', accountNumber: '', bankCode: '058' });
+  const [banks, setBanks] = useState([]);
+  const [accountName, setAccountName] = useState(null); // null = not looked up, '' = not found
+  const [resolvingAccount, setResolvingAccount] = useState(false);
+
+  // Caution fee claims
+  const [claimFor, setClaimFor] = useState(null); // booking being claimed against
+  const [claimData, setClaimData] = useState({ amount: '', reason: '' });
+  const [cautionBusyId, setCautionBusyId] = useState(null);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
 
   const [bookings, setBookings] = useState([]);
@@ -214,6 +223,7 @@ export default function Dashboard() {
 
       await api.post('/Properties', submitData, { headers: { 'Content-Type': 'multipart/form-data' } });
       toast.success('Property listed successfully!');
+      invalidate('/Properties'); // so the new listing shows on the home page straight away
       
       setIsAddingListing(false); 
       setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '' });
@@ -283,25 +293,100 @@ export default function Dashboard() {
     }
   };
 
+  const refreshWallet = async () => {
+    try {
+      const walletRes = await api.get('/Wallet');
+      setWallet(walletRes.data);
+    } catch { /* keep showing the last known wallet */ }
+  };
+
+  // Bank list comes from Paystack (via the API) so bank codes are always current.
+  const openWithdrawModal = async () => {
+    setIsWithdrawModalOpen(true);
+    if (banks.length > 0) return;
+    try {
+      const res = await api.get('/Wallet/banks');
+      setBanks(res.data);
+      if (!res.data.some((b) => b.code === withdrawData.bankCode) && res.data.length) {
+        setWithdrawData((d) => ({ ...d, bankCode: res.data[0].code }));
+      }
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't load the bank list."));
+    }
+  };
+
+  // Look up the account holder's name once we have 10 digits and a bank.
+  const resolveAccount = async (accountNumber, bankCode) => {
+    setAccountName(null);
+    if (!/^\d{10}$/.test(accountNumber) || !bankCode) return;
+    setResolvingAccount(true);
+    try {
+      const res = await api.get('/Wallet/resolve-account', { params: { accountNumber, bankCode } });
+      setAccountName(res.data.accountName);
+    } catch (error) {
+      setAccountName('');
+      toast.error(errorMessage(error, "We couldn't verify that account."));
+    } finally {
+      setResolvingAccount(false);
+    }
+  };
+
   const handleWithdraw = async (e) => {
     e.preventDefault();
     const amount = Number(withdrawData.amount);
     if (!amount || amount < 1000) return toast.error("Minimum withdrawal is ₦1,000.");
     if (amount > wallet.balance) return toast.error("That's more than your available balance.");
     if (!/^\d{10}$/.test(withdrawData.accountNumber)) return toast.error("Account number must be 10 digits.");
+    if (!accountName) return toast.error("Wait for the account name to appear before confirming.");
 
     setIsWithdrawing(true);
     try {
       const response = await api.post('/Wallet/withdraw', { ...withdrawData, amount });
-      toast.success(response.data?.message || "Withdrawal initiated!");
+      toast.success(response.data?.message || "Withdrawal submitted.");
       setIsWithdrawModalOpen(false);
       setWithdrawData({ amount: '', accountNumber: '', bankCode: withdrawData.bankCode });
-      const walletRes = await api.get('/Wallet');
-      setWallet(walletRes.data);
+      setAccountName(null);
     } catch (error) {
       toast.error(errorMessage(error, "Withdrawal failed."));
     } finally {
       setIsWithdrawing(false);
+      refreshWallet();
+    }
+  };
+
+  // --- CAUTION FEE (deposit) ---
+  const releaseCaution = async (booking) => {
+    if (!window.confirm(`Return the full ₦${Number(booking.cautionFee).toLocaleString()} caution fee to ${booking.guestName || 'the guest'}?`)) return;
+    setCautionBusyId(booking.id);
+    try {
+      const res = await api.post(`/HostBookings/${booking.id}/caution/release`);
+      toast.success(res.data?.message || 'Caution fee returned.');
+      handleRefreshBookings();
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't return the caution fee."));
+    } finally {
+      setCautionBusyId(null);
+    }
+  };
+
+  const submitCautionClaim = async (e) => {
+    e.preventDefault();
+    const booking = claimFor;
+    const amount = Number(claimData.amount);
+    if (!amount || amount <= 0) return toast.error('Enter the amount you’re keeping.');
+    if (amount > booking.cautionFee) return toast.error(`You can keep at most ₦${Number(booking.cautionFee).toLocaleString()}.`);
+    if (claimData.reason.trim().length < 10) return toast.error('Describe the damage in a few words (at least 10 characters).');
+
+    setCautionBusyId(booking.id);
+    try {
+      const res = await api.post(`/HostBookings/${booking.id}/caution/claim`, { amount, reason: claimData.reason.trim() });
+      toast.success(res.data?.message || 'Claim saved.');
+      setClaimFor(null);
+      handleRefreshBookings();
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't save the claim."));
+    } finally {
+      setCautionBusyId(null);
     }
   };
 
@@ -338,7 +423,7 @@ export default function Dashboard() {
 
   // --- TAB RENDERERS ---
   const renderOverview = () => {
-    if (fetchingOverview || !overview) return <BrandLoader />;
+    if (fetchingOverview || !overview) return <OverviewSkeleton />;
     const stats = [
       { label: 'Available balance', value: naira(overview.availableBalance), hint: 'Ready to withdraw' },
       { label: 'Earned this month', value: naira(overview.earningsThisMonth), hint: 'Credited to your wallet' },
@@ -544,7 +629,7 @@ export default function Dashboard() {
           action={<button onClick={startNewListing} className="btn-lime"><Plus size={16} /> New listing</button>}
         />
         {fetchingListings ? (
-          <BrandLoader />
+          <ListingCardsSkeleton count={3} />
         ) : hostProperties.length === 0 ? (
           <EmptyState icon={HomeIcon} title="No listings yet" action={<button onClick={startNewListing} className="btn-ink">Create your first listing</button>}>
             Add photos, a nightly price and the amenities guests care about, like 24/7 power and estate security.
@@ -555,7 +640,7 @@ export default function Dashboard() {
               <Link key={p.id} to={`/property/${p.id}`} className="card group overflow-hidden transition-shadow hover:shadow-lift">
                 <div className="aspect-[16/10] bg-sand">
                   {p.imageUrls?.length > 0
-                    ? <img src={p.imageUrls[0]} alt={p.title} className="h-full w-full object-cover" />
+                    ? <img src={img(p.imageUrls[0], 480)} alt={p.title} loading="lazy" decoding="async" className="h-full w-full object-cover" />
                     : <div className="grid h-full place-items-center text-faint"><ImageOff size={18} /></div>}
                 </div>
                 <div className="p-4">
@@ -584,7 +669,7 @@ export default function Dashboard() {
         }
       />
       {fetchingBookings ? (
-        <BrandLoader />
+        <ListSkeleton rows={3} label="Loading bookings" />
       ) : bookings.length === 0 ? (
         <EmptyState icon={ClipboardList} title="No bookings yet">When guests book one of your places, it’ll appear here.</EmptyState>
       ) : (
@@ -626,6 +711,38 @@ export default function Dashboard() {
                   </div>
                 )}
 
+                {booking.cautionFee > 0 && booking.cautionFeeStatus !== 'Pending' && booking.cautionFeeStatus !== 'None' && (
+                  <div className="mt-4 flex flex-col gap-3 rounded-xl border border-line p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-sm">
+                      <p className="flex items-center gap-2">
+                        <Lock size={14} className="text-muted" />
+                        Caution fee <span className="mono">{naira(booking.cautionFee)}</span>
+                        <CautionChip status={booking.cautionFeeStatus} />
+                      </p>
+                      <p className="mt-1 text-xs text-muted">
+                        {booking.cautionFeeStatus === 'Held' && booking.canResolveCaution &&
+                          <>Return it, or keep part of it for damage, before <span className="mono text-ink">{formatDateTime(booking.cautionDeadline)}</span>. After that it goes back to the guest automatically.</>}
+                        {booking.cautionFeeStatus === 'Held' && !booking.canResolveCaution &&
+                          'Held in escrow. You can return or claim it from the check-out day.'}
+                        {booking.cautionFeeStatus === 'Releasing' && 'Being returned to the guest.'}
+                        {booking.cautionFeeStatus === 'Refunded' && 'Returned to the guest.'}
+                        {(booking.cautionFeeStatus === 'Claimed' || booking.cautionFeeStatus === 'PartlyClaimed') &&
+                          <>You kept <span className="mono text-ink">{naira(booking.cautionClaimAmount)}</span>: {booking.cautionClaimReason}</>}
+                      </p>
+                    </div>
+                    {booking.cautionFeeStatus === 'Held' && booking.canResolveCaution && (
+                      <div className="flex shrink-0 gap-2">
+                        <button onClick={() => { setClaimData({ amount: '', reason: '' }); setClaimFor(booking); }} disabled={cautionBusyId === booking.id} className="btn-outline btn-sm">
+                          Keep some
+                        </button>
+                        <button onClick={() => releaseCaution(booking)} disabled={cautionBusyId === booking.id} className="btn-ink btn-sm">
+                          <Check size={14} /> Return all
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {isExpanded && (
                   <div className="mt-5 grid gap-3 border-t border-line pt-5 md:grid-cols-2 animate-fade-in">
                     <div className="inset p-4 text-sm">
@@ -653,23 +770,61 @@ export default function Dashboard() {
           })}
         </div>
       )}
+
+      <Modal open={!!claimFor} onClose={() => setClaimFor(null)} title="Keep part of the caution fee">
+        {claimFor && (
+          <form onSubmit={submitCautionClaim} className="space-y-4 p-6">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-light tracking-[-0.02em]">Keep part of the caution fee</h3>
+              <button type="button" onClick={() => setClaimFor(null)} className="btn-ghost btn-sm -mr-2" aria-label="Close"><X size={16} /></button>
+            </div>
+            <div className="inset flex justify-between px-4 py-3 text-sm">
+              <span className="text-muted">Held for {claimFor.guestName || 'the guest'}</span>
+              <span className="mono">{naira(claimFor.cautionFee)}</span>
+            </div>
+            <div>
+              <label className="label" htmlFor="claim-amount">Amount to keep (₦)</label>
+              <input id="claim-amount" type="number" min="1" max={claimFor.cautionFee} step="1" required autoFocus value={claimData.amount}
+                onChange={(e) => setClaimData({ ...claimData, amount: e.target.value })} className="input mono" />
+              {Number(claimData.amount) > 0 && Number(claimData.amount) <= claimFor.cautionFee && (
+                <p className="hint">The guest gets back <span className="mono text-ink">{naira(claimFor.cautionFee - Number(claimData.amount))}</span>.</p>
+              )}
+            </div>
+            <div>
+              <label className="label" htmlFor="claim-reason">What was damaged?</label>
+              <textarea id="claim-reason" rows="3" required minLength={10} maxLength={500} value={claimData.reason}
+                onChange={(e) => setClaimData({ ...claimData, reason: e.target.value })} className="input"
+                placeholder="e.g. Broken glass coffee table in the living room" />
+              <p className="hint">The guest sees this reason in their email.</p>
+            </div>
+            <button type="submit" disabled={cautionBusyId === claimFor.id} className="btn-ink btn-lg w-full">
+              {cautionBusyId === claimFor.id ? 'Saving…' : 'Keep this amount'}
+            </button>
+          </form>
+        )}
+      </Modal>
     </div>
   );
 
   const renderEarnings = () => (
     <div className="animate-fade-in">
       <PageHead eyebrow="Earnings" title="Wallet & payouts" lead="Withdraw your balance to any major Nigerian bank." />
-      <div className="grid gap-4 lg:grid-cols-[1fr_1.3fr]">
+      {fetchingWallet && <WalletSkeleton />}
+      <div className={`grid gap-4 lg:grid-cols-[1fr_1.3fr] ${fetchingWallet ? 'hidden' : ''}`}>
         <div className="flex flex-col justify-between rounded-2xl bg-night p-6 text-cream">
           <div>
             <p className="font-mono text-[11px] uppercase tracking-[0.08em] text-cream/60">Available balance</p>
             <p className="mono mt-3 text-4xl">{fetchingWallet ? '—' : naira(wallet.balance)}</p>
           </div>
           <div className="mt-10">
-            <button onClick={() => setIsWithdrawModalOpen(true)} disabled={fetchingWallet || wallet.balance < 1000} className="btn-lime btn-lg w-full">
+            <button onClick={openWithdrawModal} disabled={fetchingWallet || wallet.balance < 1000} className="btn-lime btn-lg w-full">
               Withdraw funds <ArrowRight size={16} />
             </button>
-            <p className="mt-2 text-center text-xs text-cream/50">Minimum withdrawal ₦1,000</p>
+            <p className="mt-2 text-center text-xs text-cream/50">
+              {wallet.pendingWithdrawals > 0
+                ? <><span className="mono text-cream/80">{naira(wallet.pendingWithdrawals)}</span> on its way to your bank</>
+                : 'Minimum withdrawal ₦1,000'}
+            </p>
           </div>
         </div>
 
@@ -680,14 +835,20 @@ export default function Dashboard() {
           ) : (
             <ul className="divide-y divide-line">
               {wallet.transactions.map((t) => {
-                const credit = t.type === 'Credit';
+                const incoming = t.type === 'Credit' || t.type === 'Reversal';
                 return (
                   <li key={t.id} className="flex items-center justify-between gap-4 py-3 text-sm">
                     <div className="min-w-0">
                       <p className="truncate">{t.description}</p>
-                      <p className="font-mono text-[11px] text-faint">{formatDay(t.date)} · {t.type}</p>
+                      <p className="flex items-center gap-2 font-mono text-[11px] text-faint">
+                        {formatDay(t.date)} · {t.type}
+                        {t.status === 'Pending' && <span className="chip-amber">Processing</span>}
+                        {t.status === 'Failed' && <span className="chip-red">Failed · returned</span>}
+                      </p>
                     </div>
-                    <span className={`mono shrink-0 ${credit ? 'text-emerald-700' : 'text-ink'}`}>{credit ? '+' : '−'}{naira(t.amount)}</span>
+                    <span className={`mono shrink-0 ${incoming ? 'text-emerald-700' : 'text-ink'} ${t.status === 'Failed' ? 'line-through opacity-50' : ''}`}>
+                      {incoming ? '+' : '−'}{naira(t.amount)}
+                    </span>
                   </li>
                 );
               })}
@@ -710,25 +871,36 @@ export default function Dashboard() {
           </div>
           <div>
             <label className="label" htmlFor="wd-bank">Bank</label>
-            <select id="wd-bank" value={withdrawData.bankCode} onChange={(e) => setWithdrawData({ ...withdrawData, bankCode: e.target.value })} className="input">
-              <option value="044">Access Bank</option>
-              <option value="214">FCMB</option>
-              <option value="070">Fidelity Bank</option>
-              <option value="011">First Bank</option>
-              <option value="058">GTBank</option>
-              <option value="50211">Kuda Bank</option>
-              <option value="232">Sterling Bank</option>
-              <option value="033">UBA</option>
-              <option value="035">Wema Bank</option>
-              <option value="057">Zenith Bank</option>
+            <select id="wd-bank" value={withdrawData.bankCode} disabled={banks.length === 0}
+              onChange={(e) => {
+                const bankCode = e.target.value;
+                setWithdrawData({ ...withdrawData, bankCode });
+                resolveAccount(withdrawData.accountNumber, bankCode);
+              }}
+              className="input">
+              {banks.length === 0 && <option>Loading banks…</option>}
+              {banks.map((b) => <option key={b.code} value={b.code}>{b.name}</option>)}
             </select>
           </div>
           <div>
             <label className="label" htmlFor="wd-acct">Account number</label>
             <input id="wd-acct" type="text" inputMode="numeric" pattern="\d{10}" maxLength={10} required value={withdrawData.accountNumber}
-              onChange={(e) => setWithdrawData({ ...withdrawData, accountNumber: e.target.value.replace(/\D/g, '') })} className="input mono tracking-wider" placeholder="0123456789" />
+              onChange={(e) => {
+                const accountNumber = e.target.value.replace(/\D/g, '');
+                setWithdrawData({ ...withdrawData, accountNumber });
+                resolveAccount(accountNumber, withdrawData.bankCode);
+              }}
+              className="input mono tracking-wider" placeholder="0123456789" />
+            <p className="hint min-h-[1.25rem]">
+              {resolvingAccount && 'Checking account…'}
+              {!resolvingAccount && accountName && <span className="flex items-center gap-1.5 text-ink"><BadgeCheck size={13} className="text-lime-deep" /> {accountName}</span>}
+              {!resolvingAccount && accountName === '' && <span className="text-red-700">Account not found. Check the number and bank.</span>}
+            </p>
           </div>
-          <button type="submit" disabled={isWithdrawing} className="btn-ink btn-lg w-full">{isWithdrawing ? 'Processing…' : 'Confirm withdrawal'}</button>
+          <button type="submit" disabled={isWithdrawing || !accountName} className="btn-ink btn-lg w-full">
+            {isWithdrawing ? 'Processing…' : accountName ? `Send to ${accountName.split(' ')[0]}` : 'Confirm withdrawal'}
+          </button>
+          <p className="text-center text-xs text-faint">Bank transfers usually arrive within minutes. If one fails, the money comes back to your wallet.</p>
         </form>
       </Modal>
     </div>
@@ -738,7 +910,7 @@ export default function Dashboard() {
     <div className="max-w-2xl animate-fade-in">
       <PageHead eyebrow="Verification" title="Become a verified host" lead="Verified hosts get unlimited listings and a badge guests see on every listing." />
       {fetchingVerification && !verificationData.status ? (
-        <BrandLoader />
+        <div className="card space-y-4 p-6" aria-hidden="true"><Bone className="h-5 w-48" /><Bone className="h-4 w-full" /><Bone className="h-4 w-2/3" /></div>
       ) : isVerified ? (
         <div className="card flex items-center gap-4 p-6">
           <span className="grid h-11 w-11 place-items-center rounded-full bg-lime"><BadgeCheck size={20} /></span>

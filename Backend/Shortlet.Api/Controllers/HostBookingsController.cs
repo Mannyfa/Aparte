@@ -5,35 +5,35 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Shortlet.Api.Helpers;
 using Shortlet.Api.Hubs;
+using Shortlet.Api.Services;
 using Shortlet.Core.Entities;
 using Shortlet.Core.Interfaces;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
 {
+    public class CautionClaimRequest
+    {
+        public decimal Amount { get; set; }
+        public string Reason { get; set; } = string.Empty;
+    }
+
     [ApiController]
     [Route("api/[controller]")]
     [Authorize]
     public class HostBookingsController : ControllerBase
     {
         private readonly AppDbContext _context;
-        private readonly IPaystackService _paystack;
+        private readonly BookingFinanceService _finance;
         private readonly IEmailQueue _emailQueue;
         private readonly IHubContext<ChatHub> _hubContext;
-        private readonly ILogger<HostBookingsController> _logger;
 
-        public HostBookingsController(
-            AppDbContext context,
-            IPaystackService paystack,
-            IEmailQueue emailQueue,
-            IHubContext<ChatHub> hubContext,
-            ILogger<HostBookingsController> logger)
+        public HostBookingsController(AppDbContext context, BookingFinanceService finance, IEmailQueue emailQueue, IHubContext<ChatHub> hubContext)
         {
             _context = context;
-            _paystack = paystack;
+            _finance = finance;
             _emailQueue = emailQueue;
             _hubContext = hubContext;
-            _logger = logger;
         }
 
         [HttpGet]
@@ -51,6 +51,9 @@ namespace Shortlet.Api.Controllers
                     propertyTitle = b.Property.Title,
                     totalPrice = b.TotalPrice,
                     cautionFee = b.CautionFeeAmount, // held in escrow; not part of the host's payout
+                    cautionFeeStatus = b.CautionFeeStatus,
+                    cautionClaimAmount = b.CautionClaimAmount,
+                    cautionClaimReason = b.CautionClaimReason,
                     status = b.Status,
                     checkInCode = b.Status == "confirmed" || b.Status == "completed" ? b.CheckInCode : null,
                     checkIn = b.CheckIn,
@@ -61,7 +64,17 @@ namespace Shortlet.Api.Controllers
                 })
                 .ToListAsync();
 
-            return Ok(bookings);
+            var window = _finance.CautionClaimWindow;
+            var now = DateTime.UtcNow;
+            return Ok(bookings.Select(b => new
+            {
+                b.id, b.propertyTitle, b.totalPrice, b.cautionFee, b.cautionFeeStatus, b.cautionClaimAmount, b.cautionClaimReason,
+                b.status, b.checkInCode, b.checkIn, b.checkOut, b.guestName, b.guestPhone, b.addOns,
+                // The host can return or claim the deposit from check-out day until the deadline.
+                cautionDeadline = b.cautionFeeStatus == "Held" ? b.checkOut + window : (DateTime?)null,
+                canResolveCaution = b.cautionFeeStatus == "Held" && (b.status is "confirmed" or "completed")
+                                    && now >= b.checkOut.Date && now < b.checkOut + window
+            }));
         }
 
         /// <summary>Loads a booking only if it belongs to one of the caller's properties.</summary>
@@ -120,77 +133,83 @@ namespace Shortlet.Api.Controllers
             var booking = await FindOwnBookingAsync(id);
             if (booking == null) return NotFound(new { message = "Booking not found." });
 
-            if (booking.Status is "rejected" or "cancelled" or "completed" or "failed")
-                return BadRequest(new { message = $"This booking is already '{booking.Status}'." });
-            if (booking.Status == "confirmed")
-                return BadRequest(new { message = "Confirmed bookings can't be rejected here. Contact support to cancel." });
+            if (booking.Status is not ("paid" or "split_pending" or "pending"))
+                return BadRequest(new { message = booking.Status == "confirmed"
+                    ? "Confirmed bookings can't be declined here. Contact support to cancel."
+                    : $"This booking is already '{booking.Status}'." });
 
-            var refunded = false;
-            if (booking.Status is "paid" or "split_pending")
-            {
-                // 1. Refund every payment that funded this booking (one for solo, one per friend for splits,
-                //    including friends who already paid into a split that isn't complete yet).
-                var references = await _context.SplitShares
-                    .Where(s => s.SplitGroup.BookingId == booking.Id && s.Status == "Paid")
-                    .Select(s => s.PaymentReference)
-                    .ToListAsync();
-                if (references.Count == 0 && booking.Status == "paid") references.Add(booking.PaymentReference);
-
-                foreach (var reference in references)
-                {
-                    var (success, message) = await _paystack.RefundAsync(reference);
-                    if (!success)
-                    {
-                        _logger.LogError("Refund of {Reference} for booking {BookingId} failed: {Message}", reference, booking.Id, message);
-                        return StatusCode(502, new { message = $"Paystack refund failed: {message}. The booking was not changed." });
-                    }
-                }
-                refunded = references.Count > 0;
-
-                var splitGroup = await _context.SplitGroups.FirstOrDefaultAsync(sg => sg.BookingId == booking.Id);
-                if (splitGroup != null) splitGroup.Status = "Cancelled";
-
-                // 2. Reverse exactly what the webhook credited to the host.
-                await using var tx = await _context.Database.BeginTransactionAsync();
-                var credited = await _context.Transactions
-                    .Where(t => t.Reference == booking.Id.ToString() && t.Type == "Credit")
-                    .SumAsync(t => t.Amount);
-
-                if (credited > 0)
-                {
-                    var wallet = await WalletLedger.LockWalletAsync(_context, booking.Property.HostId);
-                    wallet.Balance -= credited;
-                    wallet.UpdatedAt = DateTime.UtcNow;
-                    _context.Transactions.Add(new Transaction
-                    {
-                        WalletId = wallet.Id,
-                        Amount = credited,
-                        Type = "Debit",
-                        Description = "Refund for rejected booking",
-                        Reference = booking.Id + "_refund"
-                    });
-                }
-
-                if (booking.CautionFeeAmount > 0) booking.CautionFeeStatus = "Refunded";
-                booking.Status = "rejected";
-                await _context.SaveChangesAsync();
-                await tx.CommitAsync();
-            }
-            else
-            {
-                booking.Status = "rejected"; // unpaid / split still collecting: nothing to refund yet
-                await _context.SaveChangesAsync();
-            }
+            var allAccepted = await _finance.CancelAndRefundAsync(
+                booking.Id, "rejected", "Host declined the booking",
+                $"Your host couldn't accept your dates for {booking.Property.Title}.");
 
             await _hubContext.Clients.Group(booking.GuestId.ToString()).SendAsync("ReceiveNotification", new
             {
                 title = "Booking Declined",
-                message = refunded
-                    ? $"The host couldn't accept your dates for {booking.Property.Title}. A full refund has been issued."
-                    : $"The host couldn't accept your dates for {booking.Property.Title}."
+                message = $"The host couldn't accept your dates for {booking.Property.Title}. Any payment is being refunded."
             });
 
-            return Ok(new { message = refunded ? "Booking rejected. Guest has been refunded." : "Booking rejected." });
+            return Ok(new
+            {
+                message = allAccepted
+                    ? "Booking declined. Any payment is being refunded to the guest."
+                    : "Booking declined. A refund couldn't be sent yet and will be retried automatically."
+            });
+        }
+
+        // =================================================================
+        // CAUTION FEE: return it, or keep some/all for damage
+        // =================================================================
+
+        private async Task<(Booking? Booking, IActionResult? Error)> LoadCautionBookingAsync(Guid id)
+        {
+            var booking = await FindOwnBookingAsync(id);
+            if (booking == null) return (null, NotFound(new { message = "Booking not found." }));
+            if (booking.CautionFeeStatus != "Held")
+                return (null, BadRequest(new { message = booking.CautionFeeAmount <= 0 ? "This booking has no caution fee." : $"The caution fee is already {booking.CautionFeeStatus.ToLowerInvariant()}." }));
+            if (booking.Status is not ("confirmed" or "completed"))
+                return (null, BadRequest(new { message = "The caution fee can only be settled for confirmed stays." }));
+
+            var now = DateTime.UtcNow;
+            if (now < booking.CheckOut.Date)
+                return (null, BadRequest(new { message = "You can settle the caution fee from the check-out day." }));
+            if (now >= _finance.CautionDeadline(booking))
+                return (null, BadRequest(new { message = "The claim window has closed; the caution fee is being returned to the guest." }));
+            return (booking, null);
+        }
+
+        [HttpPost("{id}/caution/release")]
+        public async Task<IActionResult> ReleaseCaution(Guid id)
+        {
+            var (booking, error) = await LoadCautionBookingAsync(id);
+            if (error != null) return error;
+
+            var (ok, message) = await _finance.ResolveCautionAsync(booking!.Id, 0, null);
+            return ok ? Ok(new { message }) : BadRequest(new { message });
+        }
+
+        [HttpPost("{id}/caution/claim")]
+        public async Task<IActionResult> ClaimCaution(Guid id, [FromBody] CautionClaimRequest request)
+        {
+            var (booking, error) = await LoadCautionBookingAsync(id);
+            if (error != null) return error;
+
+            var reason = request.Reason?.Trim() ?? string.Empty;
+            if (request.Amount <= 0) return BadRequest(new { message = "Enter the amount you're keeping." });
+            if (request.Amount > booking!.CautionFeeAmount)
+                return BadRequest(new { message = $"You can keep at most ₦{booking.CautionFeeAmount:N0}." });
+            if (reason.Length < 10) return BadRequest(new { message = "Describe the damage (at least 10 characters) so the guest knows why." });
+            if (reason.Length > 500) return BadRequest(new { message = "Keep the reason under 500 characters." });
+
+            var (ok, message) = await _finance.ResolveCautionAsync(booking.Id, request.Amount, reason);
+            if (ok)
+            {
+                await _hubContext.Clients.Group(booking.GuestId.ToString()).SendAsync("ReceiveNotification", new
+                {
+                    title = "Caution fee update",
+                    message = $"Your host kept ₦{request.Amount:N0} of your caution fee for {booking.Property.Title}."
+                });
+            }
+            return ok ? Ok(new { message }) : BadRequest(new { message });
         }
     }
 }

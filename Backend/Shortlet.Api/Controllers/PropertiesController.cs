@@ -5,6 +5,7 @@ using CloudinaryDotNet.Actions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Shortlet.Api.Helpers;
 using Shortlet.Core.Entities;
 using Shortlet.Infrastructure.Data;
@@ -41,16 +42,31 @@ namespace Shortlet.Api.Controllers
         private const int MaxImages = 5;
         private const long MaxImageBytes = 10 * 1024 * 1024;
 
+        /// <summary>Public listing data is cached briefly; creating a listing bumps this so caches refresh at once.</summary>
+        private static int _listingsVersion;
+        private static readonly TimeSpan PublicCacheTtl = TimeSpan.FromSeconds(30);
+
         private readonly AppDbContext _context;
         private readonly Lazy<Cloudinary> _cloudinary;
+        private readonly IMemoryCache _cache;
         private readonly ILogger<PropertiesController> _logger;
 
-        public PropertiesController(AppDbContext context, Lazy<Cloudinary> cloudinary, ILogger<PropertiesController> logger)
+        public PropertiesController(AppDbContext context, Lazy<Cloudinary> cloudinary, IMemoryCache cache, ILogger<PropertiesController> logger)
         {
             _context = context;
             _cloudinary = cloudinary;
+            _cache = cache;
             _logger = logger;
         }
+
+        private static string CacheKey(string name) => $"listings:v{Volatile.Read(ref _listingsVersion)}:{name}";
+
+        private Task<T> Cached<T>(string name, Func<Task<T>> load) =>
+            _cache.GetOrCreateAsync(CacheKey(name), entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = PublicCacheTtl;
+                return load();
+            })!;
 
         /// <summary>Listings visible to the public (everything except suspended ones).</summary>
         private IQueryable<Property> PublicProperties() => _context.Properties.Where(p => p.Status != "suspended");
@@ -154,6 +170,7 @@ namespace Shortlet.Api.Controllers
 
             _context.Properties.Add(property);
             await _context.SaveChangesAsync();
+            Interlocked.Increment(ref _listingsVersion); // new listing: public caches refresh immediately
 
             return Ok(new { property.Id, property.Title, property.Status, property.ImageUrls });
         }
@@ -171,11 +188,21 @@ namespace Shortlet.Api.Controllers
             HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
         });
 
+        /// <summary>Just what a listing card / map pin needs: no description, rules, amenities or add-ons (no join).</summary>
+        private static IQueryable<object> ProjectCard(IQueryable<Property> query) => query.Select(p => new
+        {
+            p.Id, p.Title, p.Type, p.PricePerNight,
+            p.City, p.State, p.Area,
+            p.ImageUrls,
+            HostVerificationStatus = p.Host != null ? p.Host.VerificationStatus : "Unverified"
+        });
+
         [HttpGet]
         [AllowAnonymous]
         public async Task<IActionResult> GetProperties()
         {
-            var properties = await Project(PublicProperties().OrderByDescending(p => p.CreatedAt)).ToListAsync();
+            var properties = await Cached("all", () =>
+                ProjectCard(PublicProperties().OrderByDescending(p => p.CreatedAt)).AsNoTracking().ToListAsync());
             return Ok(properties);
         }
 
@@ -183,8 +210,10 @@ namespace Shortlet.Api.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GetProperty(Guid id)
         {
-            var property = await Project(PublicProperties().Where(p => p.Id == id)).FirstOrDefaultAsync();
+            var property = await Cached($"one:{id}", () =>
+                Project(PublicProperties().Where(p => p.Id == id)).AsNoTracking().FirstOrDefaultAsync());
             if (property == null) return NotFound(new { message = "Property not found." });
+            Response.Headers.CacheControl = "public, max-age=30";
             return Ok(property);
         }
 
@@ -208,18 +237,30 @@ namespace Shortlet.Api.Controllers
             if (minPrice.HasValue) query = query.Where(p => p.PricePerNight >= minPrice.Value);
             if (maxPrice.HasValue) query = query.Where(p => p.PricePerNight <= maxPrice.Value);
 
-            var totalItems = await query.CountAsync();
-            var properties = await Project(query.OrderByDescending(p => p.CreatedAt).ThenBy(p => p.Id)
-                    .Skip((page - 1) * pageSize).Take(pageSize))
-                .ToListAsync();
-
-            return Ok(new
+            var cacheName = $"search:{searchTerm?.Trim().ToLowerInvariant()}|{type}|{minPrice}|{maxPrice}|{page}|{pageSize}";
+            var result = await Cached(cacheName, async () =>
             {
-                Data = properties,
-                CurrentPage = page,
-                TotalPages = (int)Math.Ceiling(totalItems / (double)pageSize),
-                TotalItems = totalItems
+                var properties = await ProjectCard(query.OrderByDescending(p => p.CreatedAt).ThenBy(p => p.Id)
+                        .Skip((page - 1) * pageSize).Take(pageSize))
+                    .AsNoTracking()
+                    .ToListAsync();
+
+                // A short first page already tells us the total: skip the second round trip to the database.
+                var totalItems = page == 1 && properties.Count < pageSize
+                    ? properties.Count
+                    : await query.CountAsync();
+
+                return new
+                {
+                    Data = properties,
+                    CurrentPage = page,
+                    TotalPages = (int)Math.Ceiling(totalItems / (double)pageSize),
+                    TotalItems = totalItems
+                };
             });
+
+            Response.Headers.CacheControl = "public, max-age=15";
+            return Ok(result);
         }
 
         [HttpGet("host")]

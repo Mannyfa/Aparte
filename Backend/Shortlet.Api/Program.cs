@@ -66,7 +66,17 @@ builder.Services.AddSwaggerGen(c =>
 // 3. Database
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException("ConnectionStrings:DefaultConnection is missing. Copy appsettings.example.json to appsettings.Development.json and fill it in.");
-builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(connectionString));
+var (tunedConnectionString, dbTuning) = Shortlet.Api.Helpers.DatabaseConnection.Tune(connectionString);
+builder.Services.AddDbContext<AppDbContext>(options => options.UseNpgsql(tunedConnectionString));
+
+// Compress JSON responses (listings with descriptions/arrays shrink ~70–80%).
+builder.Services.AddResponseCompression(options =>
+{
+    options.EnableForHttps = true;
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProvider>();
+    options.Providers.Add<Microsoft.AspNetCore.ResponseCompression.GzipCompressionProvider>();
+});
+builder.Services.Configure<Microsoft.AspNetCore.ResponseCompression.BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 
 // 4. Services
 builder.Services.AddScoped<IAuthService, AuthService>();
@@ -75,6 +85,11 @@ builder.Services.AddHttpClient(); // IHttpClientFactory for the wallet payout ca
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddSingleton<IEmailQueue, EmailQueueService>();
 builder.Services.AddHostedService<EmailBackgroundWorker>();
+
+// Money flows: refunds, caution fees, payouts, plus the worker that expires/cancels/retries on a schedule.
+builder.Services.AddMemoryCache(); // bank list cache
+builder.Services.AddScoped<Shortlet.Api.Services.BookingFinanceService>();
+builder.Services.AddHostedService<Shortlet.Api.Services.MoneyMaintenanceWorker>();
 
 // Cloudinary is created lazily so a missing config only breaks uploads, not the whole API.
 builder.Services.AddSingleton(sp => new Lazy<Cloudinary>(() =>
@@ -145,11 +160,36 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+if (dbTuning.Count > 0)
+    app.Logger.LogWarning("Database connection string adjusted for performance: {Changes}. Update the configured string to match.", string.Join(", ", dbTuning));
+
+// Open the first database connection now, so the first visitor doesn't wait for the TLS handshake.
+_ = Task.Run(async () =>
+{
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var started = DateTime.UtcNow;
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        app.Logger.LogInformation("Database warm-up took {Ms} ms.", (int)(DateTime.UtcNow - started).TotalMilliseconds);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "Database warm-up failed; the first request will open the connection instead.");
+    }
+});
+
 // Render / other hosts terminate TLS in front of the app.
 app.UseForwardedHeaders(new ForwardedHeadersOptions
 {
     ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
 });
+
+app.UseResponseCompression();
+
+// Cheap endpoint for uptime monitors / keep-alive pings (no database access).
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
 app.UseSwagger();
 app.UseSwaggerUI();

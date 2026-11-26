@@ -6,6 +6,7 @@ import L from 'leaflet';
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+import { img } from '../utils/format';
 
 // Leaflet's default marker images don't resolve under Vite; point them at the bundled files.
 delete L.Icon.Default.prototype._getIconUrl;
@@ -71,7 +72,7 @@ export default function PropertyMap({ properties }) {
               <div className="w-48">
                 {property.imageUrls?.[0] && (
                   <img
-                    src={property.imageUrls[0]}
+                    src={img(property.imageUrls[0], 320)}
                     alt={property.title}
                     className="w-full h-24 object-cover rounded-t-lg mb-2"
                   />

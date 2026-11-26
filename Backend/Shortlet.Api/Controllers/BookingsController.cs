@@ -287,7 +287,12 @@ namespace Shortlet.Api.Controllers
                     // Only reveal the gate code once the host has confirmed the stay.
                     CheckInCode = b.Status == "confirmed" || b.Status == "completed" ? b.CheckInCode : null,
                     AddOns = b.PurchasedAddOns.Select(a => new { a.Id, a.Name, a.Price }),
-                    HasReviewed = _context.Reviews.Any(r => r.PropertyId == b.PropertyId && r.GuestId == guestId.Value)
+                    HasReviewed = _context.Reviews.Any(r => r.PropertyId == b.PropertyId && r.GuestId == guestId.Value),
+                    CautionFee = b.CautionFeeAmount,
+                    b.CautionFeeStatus,
+                    b.CautionClaimAmount,
+                    b.CautionClaimReason,
+                    SplitGroupId = _context.SplitGroups.Where(g => g.BookingId == b.Id).Select(g => (Guid?)g.Id).FirstOrDefault()
                 })
                 .ToListAsync();
 

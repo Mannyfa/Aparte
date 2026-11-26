@@ -66,7 +66,8 @@ const STATUS = {
   confirmed: ['chip-green', 'Confirmed'],
   completed: ['chip-neutral', 'Completed'],
   rejected: ['chip-red', 'Declined · refunded'],
-  cancelled: ['chip-red', 'Cancelled'],
+  cancelled: ['chip-red', 'Cancelled · refunded'],
+  expired: ['chip-neutral', 'Expired · refunded'],
   failed: ['chip-neutral', 'Payment failed'],
 };
 
@@ -104,4 +105,20 @@ export function Modal({ open, onClose, title, children, wide = false }) {
       </div>
     </div>
   );
+}
+
+const CAUTION = {
+  Pending: ['chip-neutral', 'Unpaid'],
+  Held: ['chip-lime', 'In escrow'],
+  Releasing: ['chip-amber', 'Returning'],
+  Refunded: ['chip-green', 'Returned'],
+  Claimed: ['chip-red', 'Kept by host'],
+  PartlyClaimed: ['chip-amber', 'Partly kept'],
+};
+
+/** Status of a booking's refundable caution fee. */
+export function CautionChip({ status }) {
+  const entry = CAUTION[status];
+  if (!entry) return null;
+  return <span className={entry[0]}>{entry[1]}</span>;
 }

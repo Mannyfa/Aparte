@@ -9,8 +9,10 @@ import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import api, { errorMessage } from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import { Loader, Modal, Row } from '../components/ui';
-import { naira } from '../utils/format';
+import { Modal, Row } from '../components/ui';
+import { PropertyDetailsSkeleton } from '../components/Skeletons';
+import { peek, getCached } from '../utils/cache';
+import { naira, img } from '../utils/format';
 
 function Gallery({ images, title }) {
   const [active, setActive] = useState(0);
@@ -27,7 +29,7 @@ function Gallery({ images, title }) {
   return (
     <div className="space-y-2">
       <div className="overflow-hidden rounded-2xl bg-sand">
-        <img src={images[active]} alt={title} className="aspect-[16/9] w-full object-cover md:aspect-[16/7]" />
+        <img src={img(images[active], 1600)} alt={title} decoding="async" className="aspect-[16/9] w-full object-cover md:aspect-[16/7]" />
       </div>
       {images.length > 1 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -38,7 +40,7 @@ function Gallery({ images, title }) {
               className={`h-16 w-24 shrink-0 overflow-hidden rounded-lg border-2 transition ${i === active ? 'border-ink' : 'border-transparent opacity-70 hover:opacity-100'}`}
               aria-label={`Show photo ${i + 1}`}
             >
-              <img src={src} alt="" className="h-full w-full object-cover" />
+              <img src={img(src, 200)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
             </button>
           ))}
         </div>
@@ -53,12 +55,13 @@ export default function PropertyDetails() {
   const location = useLocation();
   const { isAuthenticated, user } = useContext(AuthContext);
 
-  const [property, setProperty] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // If the listing card was hovered/tapped, its details are usually already cached: render instantly.
+  const [property, setProperty] = useState(() => peek(`/Properties/${id}`) ?? null);
+  const [loading, setLoading] = useState(() => !peek(`/Properties/${id}`));
 
   const [checkIn, setCheckIn] = useState(null);
   const [checkOut, setCheckOut] = useState(null);
-  const [bookedDates, setBookedDates] = useState([]);
+  const [bookedDates, setBookedDates] = useState(() => (peek(`/Properties/${id}/booked-dates`) ?? []).map((d) => parseISO(d)));
 
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
   const [selectedAddOns, setSelectedAddOns] = useState([]);
@@ -71,12 +74,14 @@ export default function PropertyDetails() {
   useEffect(() => {
     const fetchPropertyAndDates = async () => {
       try {
-        const propResponse = await api.get(`/Properties/${id}`);
-        setProperty(propResponse.data);
-
-        const datesResponse = await api.get(`/Properties/${id}/booked-dates`);
+        // Both requests at once (they used to run one after the other).
+        const [propertyData, dates] = await Promise.all([
+          getCached(`/Properties/${id}`),
+          getCached(`/Properties/${id}/booked-dates`, { maxAge: 10_000 }), // availability should be fresh
+        ]);
+        setProperty(propertyData);
         // "yyyy-MM-dd" strings are calendar days: parse them as local dates, not UTC midnight
-        setBookedDates(datesResponse.data.map((d) => parseISO(d)));
+        setBookedDates(dates.map((d) => parseISO(d)));
       } catch (error) {
         toast.error(errorMessage(error, 'Failed to load this property.'));
         navigate('/');
@@ -134,7 +139,7 @@ export default function PropertyDetails() {
     }
   };
 
-  if (loading) return <Loader label="Loading stay" />;
+  if (loading) return <PropertyDetailsSkeleton />;
   if (!property) return null;
 
   const totalRoomPrice = property.pricePerNight * nights;
@@ -301,7 +306,7 @@ export default function PropertyDetails() {
             <p className="eyebrow mb-4">Your stay</p>
             <div className="flex gap-3">
               <div className="h-16 w-20 shrink-0 overflow-hidden rounded-lg bg-sand">
-                {property.imageUrls?.[0] && <img src={property.imageUrls[0]} alt="" className="h-full w-full object-cover" />}
+                {property.imageUrls?.[0] && <img src={img(property.imageUrls[0], 200)} alt="" className="h-full w-full object-cover" />}
               </div>
               <div className="min-w-0">
                 <p className="line-clamp-2 text-sm font-medium">{property.title}</p>

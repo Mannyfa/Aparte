@@ -4,12 +4,17 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Shortlet.Api.Helpers;
+using Shortlet.Api.Services;
 using Shortlet.Core.Entities;
 using Shortlet.Core.Interfaces;
 using Shortlet.Infrastructure.Data;
 
 namespace Shortlet.Api.Controllers
 {
+    /// <summary>
+    /// Paystack events: charge.success (guest payments), transfer.* (host withdrawals) and refund.* (refunds).
+    /// Configure https://&lt;api&gt;/api/Webhooks/paystack as the webhook URL in the Paystack dashboard.
+    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class WebhooksController : ControllerBase
@@ -17,13 +22,15 @@ namespace Shortlet.Api.Controllers
         private readonly AppDbContext _context;
         private readonly IConfiguration _config;
         private readonly IEmailQueue _emailQueue;
+        private readonly BookingFinanceService _finance;
         private readonly ILogger<WebhooksController> _logger;
 
-        public WebhooksController(AppDbContext context, IConfiguration config, IEmailQueue emailQueue, ILogger<WebhooksController> logger)
+        public WebhooksController(AppDbContext context, IConfiguration config, IEmailQueue emailQueue, BookingFinanceService finance, ILogger<WebhooksController> logger)
         {
             _context = context;
             _config = config;
             _emailQueue = emailQueue;
+            _finance = finance;
             _logger = logger;
         }
 
@@ -48,118 +55,12 @@ namespace Shortlet.Api.Controllers
             {
                 using var doc = JsonDocument.Parse(body);
                 var payload = doc.RootElement;
-                if (payload.GetProperty("event").GetString() != "charge.success") return Ok();
-
+                var eventName = payload.GetProperty("event").GetString() ?? string.Empty;
                 var data = payload.GetProperty("data");
-                var reference = data.GetProperty("reference").GetString() ?? string.Empty;
-                var amountPaidKobo = data.TryGetProperty("amount", out var amt) ? amt.GetInt64() : 0;
 
-                await using var tx = await _context.Database.BeginTransactionAsync();
-
-                Booking? bookingToProcess = null;
-
-                // ---------------- BRANCH 1: APARTEY SPLIT (fractional payment) ----------------
-                if (reference.StartsWith("SPLIT", StringComparison.Ordinal))
-                {
-                    SplitShare? share = null;
-                    if (BookingRules.TryParseSplitReference(reference, out var shareId))
-                    {
-                        await WalletLedger.LockShareAsync(_context, shareId);
-                        share = await _context.SplitShares.Include(s => s.SplitGroup).FirstOrDefaultAsync(s => s.Id == shareId);
-                    }
-                    share ??= await _context.SplitShares.Include(s => s.SplitGroup).FirstOrDefaultAsync(s => s.PaymentReference == reference);
-
-                    if (share == null)
-                    {
-                        _logger.LogWarning("Split payment {Reference} does not match any share.", reference);
-                    }
-                    else if (share.Status != "Paid")
-                    {
-                        if (amountPaidKobo < ToKobo(share.Amount))
-                        {
-                            _logger.LogWarning("Split payment {Reference} underpaid: {Paid} kobo for {Expected}.", reference, amountPaidKobo, ToKobo(share.Amount));
-                            return Ok();
-                        }
-
-                        // Lock the booking first so two friends paying at the same time can't both miss "fully funded".
-                        await WalletLedger.LockBookingAsync(_context, share.SplitGroup.BookingId);
-                        await _context.Entry(share.SplitGroup).ReloadAsync();
-
-                        share.Status = "Paid";
-                        share.PaymentReference = reference; // remember the reference that actually paid (for refunds)
-                        share.SplitGroup.PaidShares += 1;
-                        _logger.LogInformation("Split share paid ({Paid}/{Total}) for group {Group}.", share.SplitGroup.PaidShares, share.SplitGroup.TotalShares, share.SplitGroupId);
-
-                        if (share.SplitGroup.PaidShares >= share.SplitGroup.TotalShares)
-                        {
-                            share.SplitGroup.Status = "Completed";
-                            bookingToProcess = await _context.Bookings.Include(b => b.Property).Include(b => b.Guest)
-                                .FirstOrDefaultAsync(b => b.Id == share.SplitGroup.BookingId);
-                        }
-                        await _context.SaveChangesAsync();
-                    }
-                }
-                // ---------------- BRANCH 2: STANDARD SOLO BOOKING ----------------
-                else if (Guid.TryParse(reference, out var bookingId))
-                {
-                    await WalletLedger.LockBookingAsync(_context, bookingId);
-                    bookingToProcess = await _context.Bookings.Include(b => b.Property).Include(b => b.Guest)
-                        .FirstOrDefaultAsync(b => b.Id == bookingId);
-
-                    if (bookingToProcess != null && amountPaidKobo < ToKobo(bookingToProcess.TotalPrice))
-                    {
-                        _logger.LogWarning("Booking {BookingId} underpaid: {Paid} kobo for {Expected}.", bookingId, amountPaidKobo, ToKobo(bookingToProcess.TotalPrice));
-                        return Ok();
-                    }
-                }
-
-                // ---------------- ESCROW & PAYOUT ENGINE (runs once, when 100% funded) ----------------
-                // "failed" is included: the guest may complete payment after our init call timed out.
-                if (bookingToProcess != null && bookingToProcess.Status is "pending" or "split_pending" or "failed")
-                {
-                    bookingToProcess.Status = "paid";
-                    if (bookingToProcess.CautionFeeAmount > 0) bookingToProcess.CautionFeeStatus = "Held";
-
-                    decimal addOnsTotal = await _context.BookingAddOns
-                        .Where(a => a.BookingId == bookingToProcess.Id)
-                        .SumAsync(a => a.Price);
-
-                    // Room + 5% fee = total − caution − add-ons. The host keeps the room rate and 100% of add-ons.
-                    decimal roomWithFee = bookingToProcess.TotalPrice - bookingToProcess.CautionFeeAmount - addOnsTotal;
-                    decimal roomRate = roomWithFee / (1 + BookingRules.PlatformFeeRate);
-                    decimal hostEarnings = Math.Round(roomRate + addOnsTotal, 2);
-
-                    var wallet = await WalletLedger.LockWalletAsync(_context, bookingToProcess.Property.HostId);
-                    wallet.Balance += hostEarnings;
-                    wallet.UpdatedAt = DateTime.UtcNow;
-
-                    _context.Transactions.Add(new Transaction
-                    {
-                        WalletId = wallet.Id,
-                        Amount = hostEarnings,
-                        Type = "Credit",
-                        Description = $"Room Earnings & Add-Ons (Escrow Held: ₦{bookingToProcess.CautionFeeAmount:N0})",
-                        Reference = bookingToProcess.Id.ToString()
-                    });
-
-                    await _context.SaveChangesAsync();
-                    await tx.CommitAsync();
-                    _logger.LogInformation("Booking {BookingId} paid. Host credited ₦{Amount:N2}.", bookingToProcess.Id, hostEarnings);
-
-                    await _emailQueue.QueueEmailAsync(new EmailMessagePayload
-                    {
-                        ToEmail = bookingToProcess.Guest.Email,
-                        Subject = $"Payment received: {bookingToProcess.Property.Title}",
-                        Body = $"<p>Hi {System.Net.WebUtility.HtmlEncode(bookingToProcess.Guest.Name)},</p>" +
-                               $"<p>We've received your payment for <strong>{System.Net.WebUtility.HtmlEncode(bookingToProcess.Property.Title)}</strong> " +
-                               $"({bookingToProcess.CheckIn:dd MMM yyyy} – {bookingToProcess.CheckOut:dd MMM yyyy}). " +
-                               "Your host will confirm shortly and you'll receive your check-in code by email.</p>"
-                    });
-                }
-                else
-                {
-                    await tx.CommitAsync();
-                }
+                if (eventName == "charge.success") await HandleChargeAsync(data);
+                else if (eventName.StartsWith("transfer.")) await HandleTransferAsync(eventName, data);
+                else if (eventName.StartsWith("refund.")) await HandleRefundAsync(eventName, data);
 
                 return Ok();
             }
@@ -168,6 +69,213 @@ namespace Shortlet.Api.Controllers
                 _logger.LogError(ex, "Paystack webhook processing failed");
                 return StatusCode(500); // Paystack will retry
             }
+        }
+
+        // ------------------------------------------------------------------
+        // charge.success
+        // ------------------------------------------------------------------
+        private async Task HandleChargeAsync(JsonElement data)
+        {
+            var reference = data.GetProperty("reference").GetString() ?? string.Empty;
+            var amountPaidKobo = data.TryGetProperty("amount", out var amt) ? amt.GetInt64() : 0;
+
+            if (reference.StartsWith("SPLIT", StringComparison.Ordinal))
+                await HandleSplitShareAsync(reference, amountPaidKobo);
+            else if (Guid.TryParse(reference, out var bookingId))
+                await HandleSoloPaymentAsync(bookingId, reference, amountPaidKobo);
+            else
+                _logger.LogWarning("charge.success for unknown reference {Reference}", reference);
+        }
+
+        private async Task HandleSplitShareAsync(string reference, long amountPaidKobo)
+        {
+            Booking? completedBooking = null;
+            SplitShare? share = null;
+            var refundLateShare = false;
+
+            await using (var tx = await _context.Database.BeginTransactionAsync())
+            {
+                if (BookingRules.TryParseSplitReference(reference, out var shareId))
+                {
+                    await WalletLedger.LockShareAsync(_context, shareId);
+                    share = await _context.SplitShares.Include(s => s.SplitGroup).FirstOrDefaultAsync(s => s.Id == shareId);
+                }
+                share ??= await _context.SplitShares.Include(s => s.SplitGroup).FirstOrDefaultAsync(s => s.PaymentReference == reference);
+
+                if (share == null) { _logger.LogWarning("Split payment {Reference} does not match any share.", reference); return; }
+                if (share.Status == "Paid") return; // duplicate delivery
+                if (amountPaidKobo < ToKobo(share.Amount))
+                {
+                    _logger.LogWarning("Split payment {Reference} underpaid: {Paid} kobo for {Expected}.", reference, amountPaidKobo, ToKobo(share.Amount));
+                    return;
+                }
+
+                // Lock the booking so two friends paying at the same moment can't both miss "fully funded".
+                await WalletLedger.LockBookingAsync(_context, share.SplitGroup.BookingId);
+                await _context.Entry(share.SplitGroup).ReloadAsync();
+
+                share.Status = "Paid";
+                share.PaymentReference = reference; // the reference that actually paid (needed for refunds)
+
+                if (share.SplitGroup.Status != "Pending")
+                {
+                    // Paid after the group expired or the host declined: give this friend their money back.
+                    refundLateShare = true;
+                }
+                else
+                {
+                    share.SplitGroup.PaidShares += 1;
+                    _logger.LogInformation("Split share paid ({Paid}/{Total}) for group {Group}.", share.SplitGroup.PaidShares, share.SplitGroup.TotalShares, share.SplitGroupId);
+                    if (share.SplitGroup.PaidShares >= share.SplitGroup.TotalShares)
+                    {
+                        share.SplitGroup.Status = "Completed";
+                        completedBooking = await _context.Bookings.Include(b => b.Property).Include(b => b.Guest)
+                            .FirstOrDefaultAsync(b => b.Id == share.SplitGroup.BookingId);
+                    }
+                }
+                await _context.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+
+            if (refundLateShare)
+            {
+                _logger.LogWarning("Share {Reference} paid after its group closed; refunding.", reference);
+                await _finance.RefundOnceAsync(share.SplitGroup.BookingId, reference, share.Amount, partial: false,
+                    BookingFinanceService.PurposeBooking, "Group booking was no longer open");
+                return;
+            }
+
+            if (completedBooking != null) await ConfirmPaymentAsync(completedBooking);
+        }
+
+        private async Task HandleSoloPaymentAsync(Guid bookingId, string reference, long amountPaidKobo)
+        {
+            var booking = await _context.Bookings.Include(b => b.Property).Include(b => b.Guest).FirstOrDefaultAsync(b => b.Id == bookingId);
+            if (booking == null) { _logger.LogWarning("Payment for unknown booking {BookingId}", bookingId); return; }
+
+            if (amountPaidKobo < ToKobo(booking.TotalPrice))
+            {
+                _logger.LogWarning("Booking {BookingId} underpaid: {Paid} kobo for {Expected}.", bookingId, amountPaidKobo, ToKobo(booking.TotalPrice));
+                return;
+            }
+
+            if (booking.Status is "pending" or "failed")
+            {
+                await ConfirmPaymentAsync(booking);
+            }
+            else if (booking.Status is "rejected" or "cancelled" or "expired")
+            {
+                // The guest paid for a booking that's no longer open. Refund it.
+                await _finance.RefundOnceAsync(booking.Id, reference, booking.TotalPrice, partial: false,
+                    BookingFinanceService.PurposeBooking, "Booking was no longer open");
+            }
+            // paid / confirmed / completed: duplicate delivery, nothing to do
+        }
+
+        /// <summary>
+        /// Marks a fully-funded booking as paid and credits the host, unless its dates were taken while the
+        /// guest was paying (e.g. they paid after the 30-minute hold). In that case it is cancelled and refunded.
+        /// </summary>
+        private async Task ConfirmPaymentAsync(Booking booking)
+        {
+            Booking? conflict;
+            await using (var tx = await _context.Database.BeginTransactionAsync())
+            {
+                await WalletLedger.LockBookingAsync(_context, booking.Id);
+                await _context.Entry(booking).ReloadAsync();
+                if (booking.Status is not ("pending" or "split_pending" or "failed")) return; // handled by a concurrent delivery
+
+                conflict = await _context.Bookings
+                    .Where(b => b.Id != booking.Id && b.PropertyId == booking.PropertyId &&
+                                b.CheckIn < booking.CheckOut && b.CheckOut > booking.CheckIn &&
+                                (b.Status == "paid" || b.Status == "confirmed" || b.Status == "completed"))
+                    .FirstOrDefaultAsync();
+
+                if (conflict == null)
+                {
+                    booking.Status = "paid";
+                    if (booking.CautionFeeAmount > 0) booking.CautionFeeStatus = "Held";
+
+                    decimal addOnsTotal = await _context.BookingAddOns.Where(a => a.BookingId == booking.Id).SumAsync(a => a.Price);
+                    // Room + 5% fee = total − caution − add-ons. The host keeps the room rate and 100% of add-ons.
+                    decimal roomWithFee = booking.TotalPrice - booking.CautionFeeAmount - addOnsTotal;
+                    decimal hostEarnings = Math.Round(roomWithFee / (1 + BookingRules.PlatformFeeRate) + addOnsTotal, 2);
+
+                    var wallet = await WalletLedger.LockWalletAsync(_context, booking.Property.HostId);
+                    wallet.Balance += hostEarnings;
+                    wallet.UpdatedAt = DateTime.UtcNow;
+                    _context.Transactions.Add(new Transaction
+                    {
+                        WalletId = wallet.Id,
+                        Amount = hostEarnings,
+                        Type = "Credit",
+                        Description = $"Booking: {booking.Property.Title} ({booking.CheckIn:dd MMM} – {booking.CheckOut:dd MMM})",
+                        Reference = booking.Id.ToString()
+                    });
+                    await _context.SaveChangesAsync();
+                    await tx.CommitAsync();
+                    _logger.LogInformation("Booking {BookingId} paid. Host credited ₦{Amount:N2}.", booking.Id, hostEarnings);
+                }
+                else
+                {
+                    await tx.CommitAsync();
+                }
+            }
+
+            if (conflict != null)
+            {
+                _logger.LogWarning("Booking {BookingId} was paid after its dates were taken by {Other}; cancelling and refunding.", booking.Id, conflict.Id);
+                // For a solo booking the payment isn't recorded as "paid" yet, so pass it explicitly.
+                List<(string, decimal)>? payments = booking.Status == "split_pending" ? null : new() { (booking.PaymentReference, booking.TotalPrice) };
+                await _finance.CancelAndRefundAsync(booking.Id, "cancelled", "Dates were booked by someone else",
+                    $"Sorry, someone else booked {booking.Property.Title} for those dates while your payment was processing.", payments);
+                return;
+            }
+
+            await _emailQueue.QueueEmailAsync(new EmailMessagePayload
+            {
+                ToEmail = booking.Guest.Email,
+                Subject = $"Payment received: {booking.Property.Title}",
+                Body = $"<p>Hi {System.Net.WebUtility.HtmlEncode(booking.Guest.Name)},</p>" +
+                       $"<p>We've received your payment for <strong>{System.Net.WebUtility.HtmlEncode(booking.Property.Title)}</strong> " +
+                       $"({booking.CheckIn:dd MMM yyyy} – {booking.CheckOut:dd MMM yyyy}). " +
+                       "Your host will confirm shortly and you'll receive your check-in code by email.</p>"
+            });
+        }
+
+        // ------------------------------------------------------------------
+        // transfer.success / transfer.failed / transfer.reversed
+        // ------------------------------------------------------------------
+        private async Task HandleTransferAsync(string eventName, JsonElement data)
+        {
+            var reference = data.TryGetProperty("reference", out var r) ? r.GetString() : null;
+            if (string.IsNullOrEmpty(reference)) return;
+            var status = eventName["transfer.".Length..]; // success | failed | reversed
+            await _finance.FinalizePayoutAsync(reference, status);
+        }
+
+        // ------------------------------------------------------------------
+        // refund.processed / refund.failed (refund.pending / refund.processing are informational)
+        // ------------------------------------------------------------------
+        private async Task HandleRefundAsync(string eventName, JsonElement data)
+        {
+            var newStatus = eventName switch { "refund.processed" => "Processed", "refund.failed" => "Failed", _ => null };
+            if (newStatus == null) return;
+
+            string? reference = null;
+            if (data.TryGetProperty("transaction_reference", out var tr)) reference = tr.GetString();
+            else if (data.TryGetProperty("transaction", out var t) && t.ValueKind == JsonValueKind.Object && t.TryGetProperty("reference", out var tref)) reference = tref.GetString();
+            if (string.IsNullOrEmpty(reference)) { _logger.LogWarning("{Event} without a transaction reference", eventName); return; }
+
+            var refunds = await _context.Refunds.Where(x => x.TransactionReference == reference && x.Status == "Processing").ToListAsync();
+            foreach (var refund in refunds)
+            {
+                refund.Status = newStatus;
+                refund.UpdatedAt = DateTime.UtcNow;
+                if (newStatus == "Failed") refund.FailureReason = "Paystack reported the refund as failed";
+            }
+            await _context.SaveChangesAsync();
+            if (newStatus == "Failed") _logger.LogError("Paystack reported a failed refund on {Reference}; it will be retried.", reference);
         }
 
         private static long ToKobo(decimal naira) => (long)Math.Round(naira * 100, MidpointRounding.AwayFromZero);
