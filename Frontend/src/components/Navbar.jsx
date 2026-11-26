@@ -14,6 +14,7 @@ const UnreadBadge = ({ count }) =>
 
 const sectionLinks = [
   { href: '/#stays', label: 'Stays' },
+  { href: '/#why', label: 'Why Apartey' },
   { href: '/#how', label: 'How it works' },
   { href: '/#hosts', label: 'For hosts' },
   { href: '/#faq', label: 'FAQ' },

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  MapPin, Search, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, Check, ShieldCheck,
-  Users, ConciergeBell, BadgeCheck, Bell, Lock, RotateCcw, CreditCard, Map as MapIcon, LayoutGrid,
+  MapPin, Search, ArrowRight, ChevronLeft, ChevronRight, ChevronDown, Check,
+  Users, ConciergeBell, BadgeCheck, CalendarCheck, TrendingUp, MessageCircle, Gift, Lock, RotateCcw, CreditCard, Map as MapIcon, LayoutGrid,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { errorMessage } from '../utils/api';
@@ -48,6 +48,115 @@ const FAQS = [
   {
     q: 'How do hosts get paid?',
     a: 'When a guest pays, the host’s earnings (room rate plus add-ons) go to their Apartey wallet. Hosts can withdraw to any Nigerian bank account from ₦1,000.',
+  },
+];
+
+
+const ADDON_SCENARIOS = [
+  {
+    key: 'Business trip',
+    who: 'For guests travelling for work who want the logistics handled.',
+    items: [['Airport pickup (MMIA → Victoria Island)', '₦25,000'], ['Daily breakfast', '₦15,000'], ['Laundry service', '₦10,000']],
+    subtotal: '₦50,000',
+  },
+  {
+    key: 'Celebration',
+    who: 'For birthdays, proposals and other occasions worth marking.',
+    items: [['Birthday or proposal décor', '₦60,000'], ['Private chef dinner for 6', '₦90,000'], ['Cake delivery', '₦25,000']],
+    subtotal: '₦175,000',
+  },
+  {
+    key: 'Weekend with friends',
+    who: 'For groups who want the place ready and the weekend easy.',
+    items: [['PS5 with 2 controllers', '₦20,000'], ['Grocery stocking before arrival', '₦30,000'], ['Chauffeur for a day', '₦45,000']],
+    subtotal: '₦95,000',
+  },
+];
+
+function AddOnsShowcase() {
+  const [active, setActive] = useState(0);
+  const s = ADDON_SCENARIOS[active];
+  return (
+    <div className="inset mt-auto min-w-0 p-4 sm:p-5">
+      <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.08em] text-faint">Example</p>
+      <div className="segmented max-w-full flex-wrap">
+        {ADDON_SCENARIOS.map((t, i) => (
+          <button key={t.key} type="button" aria-pressed={active === i} onClick={() => setActive(i)}>{t.key}</button>
+        ))}
+      </div>
+      <p className="mt-4 text-[13px] text-muted">{s.who}</p>
+      <ul className="mt-3 space-y-2 font-mono text-[12.5px]">
+        {s.items.map(([name, price]) => (
+          <li key={name} className="flex items-start justify-between gap-4">
+            <span className="min-w-0 break-words text-muted">{name}</span>
+            <span className="shrink-0">{price}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-3 flex items-center justify-between gap-4 border-t border-line pt-3 font-mono text-[13px]">
+        <span>Add-ons subtotal</span>
+        <span>{s.subtotal}</span>
+      </div>
+      <p className="mt-4 text-[13px] text-muted">Hosts set their own add-ons and prices, and keep 100% of add-on earnings.</p>
+      <p className="mt-1 text-[13px] text-muted">Guests pick add-ons at checkout and pay for everything in one go.</p>
+    </div>
+  );
+}
+
+const WHY_FEATURES = [
+  {
+    icon: Lock,
+    title: 'Caution fee in escrow',
+    body: 'Refundable deposits are held by Apartey, not the host. After check-out the host has 72 hours to report damage and keep part of it, with a written reason; otherwise it’s refunded automatically.',
+    example: <>Tolu pays a <span className="font-mono">₦50,000</span> caution fee for a 3-night stay in Lekki. Nothing is damaged, so 72 hours after check-out the full <span className="font-mono">₦50,000</span> goes back to her card.</>,
+  },
+  {
+    icon: ConciergeBell,
+    title: 'Lifestyle add-ons from hosts',
+    body: 'Pickups, chefs, décor and extras, booked and paid for together with your stay.',
+    wide: true,
+  },
+  {
+    icon: Users,
+    title: 'Apartey Split',
+    body: 'Split a booking 2–5 ways. Each friend pays their share from their own link within 24 hours; if the group doesn’t fill, everyone who paid is refunded automatically.',
+    example: <>4 friends book a <span className="font-mono">₦480,000</span> Ikoyi penthouse for a birthday weekend: each pays <span className="font-mono">₦120,000</span> from their own link.</>,
+  },
+  {
+    icon: RotateCcw,
+    title: 'Fair, automatic refunds',
+    body: 'If a host declines, every payment is refunded. Guests can cancel for a full refund up to 48 hours before check-in; later, the host keeps half the room rate.',
+    example: 'Plans changed a week out? Cancel in My Trips and get 100% back.',
+  },
+  {
+    icon: BadgeCheck,
+    title: 'Verified hosts',
+    body: 'Hosts pass an ID check (NIN, passport, driver’s licence or voter’s card) to earn the Verified badge.',
+    example: 'Look for the lime Verified badge on listing cards.',
+  },
+  {
+    icon: CalendarCheck,
+    title: 'No double bookings',
+    body: 'Hosts sync their Airbnb and Booking.com calendars both ways.',
+    example: 'A Booking.com reservation for 12–15 Dec blocks those nights on Apartey within 30 minutes.',
+  },
+  {
+    icon: TrendingUp,
+    title: 'Smart pricing for hosts',
+    body: 'Weekend rates, seasonal rates (e.g. December) and minimum stays, priced night by night.',
+    example: <><span className="font-mono">₦85,000</span> weeknights, <span className="font-mono">₦110,000</span> Fri–Sat, <span className="font-mono">₦150,000</span> from 20 Dec–5 Jan, 2-night minimum.</>,
+  },
+  {
+    icon: MessageCircle,
+    title: 'Stay in touch',
+    body: 'In-app chat with your host, live notifications, and your check-in code in My Trips the moment the host accepts.',
+    example: 'Your host accepts, and your check-in code is waiting in My Trips.',
+  },
+  {
+    icon: Gift,
+    title: 'Rewards',
+    body: 'Promo codes at checkout, and ₦5,000 credit for you and a friend when they complete their first stay.',
+    example: <>A friend completes their first stay and you both get <span className="font-mono">₦5,000</span> credit.</>,
   },
 ];
 
@@ -390,76 +499,30 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ================= FEATURES ================= */}
-      <section className="border-t border-line">
+      {/* ================= WHY APARTEY ================= */}
+      <section id="why" className="border-t border-line bg-paper">
         <div className="page section">
-          <SectionHeader
-            eyebrow="What’s included"
-            title={<>Everything a good stay needs, <br className="hidden md:block" />nothing you have to chase.</>}
-          />
-          <div className="mt-14 grid gap-4 md:grid-cols-3">
-            {/* Escrow (wide) */}
-            <div className="card card-pad md:col-span-2">
-              <div className="inset space-y-2 p-5 font-mono text-[12.5px]">
-                <div className="flex justify-between"><span className="text-muted">Room · 3 nights</span><span>₦255,000</span></div>
-                <div className="flex justify-between"><span className="text-muted">Platform fee (5%)</span><span>+ ₦12,750</span></div>
-                <div className="flex justify-between"><span className="text-lime-deep">Caution fee → escrow</span><span className="text-lime-deep">₦50,000</span></div>
-                <div className="flex justify-between border-t border-line pt-2 text-[14px]"><span>You pay</span><span>₦317,750</span></div>
-              </div>
-              <h3 className="mt-5 font-medium">Every naira accounted for</h3>
-              <p className="mt-1.5 text-sm text-muted">See the full breakdown before you pay. The caution fee goes into escrow, not to the host.</p>
-            </div>
-
-            {/* Split */}
-            <div className="card card-pad">
-              <div className="inset flex items-center justify-center gap-2 p-5">
-                {[1, 2, 3].map((n) => (
-                  <div key={n} className={`rounded-lg px-3 py-2 text-center font-mono text-[11px] ${n === 1 ? 'bg-lime' : 'bg-paper'}`}>
-                    <div className="text-faint">#{n}</div>
-                    <div>{n === 1 ? 'Paid' : '₦106k'}</div>
+          <SectionHeader eyebrow="Why Apartey" title="What sets Apartey apart." />
+          <div className="mt-14 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {WHY_FEATURES.map(({ icon: Icon, title, body, example, wide }) => (
+              <div key={title} className={`card card-pad flex min-w-0 flex-col ${wide ? 'md:col-span-2 lg:col-span-2' : ''}`}>
+                <span className="grid h-9 w-9 place-items-center rounded-full bg-lime"><Icon size={16} /></span>
+                <h3 className="mt-4 font-medium">{title}</h3>
+                <p className="mt-1.5 mb-5 text-sm leading-relaxed text-muted">{body}</p>
+                {wide ? (
+                  <AddOnsShowcase />
+                ) : (
+                  <div className="inset mt-auto min-w-0 break-words p-4 text-[13px] leading-relaxed">
+                    <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.08em] text-faint">Example</p>
+                    {example}
                   </div>
-                ))}
+                )}
               </div>
-              <h3 className="mt-5 flex items-center gap-2 font-medium"><Users size={16} /> Apartey Split</h3>
-              <p className="mt-1.5 text-sm text-muted">Split the booking 2–5 ways. Everyone pays their share from their own link.</p>
-            </div>
-
-            {/* Add-ons */}
-            <div className="card card-pad">
-              <div className="inset flex flex-wrap gap-2 p-5">
-                {['Airport pickup', 'Private chef', 'PS5 rental', 'Extra cleaning'].map((t, i) => (
-                  <span key={t} className={`rounded-md px-2.5 py-1 text-xs ${i === 0 ? 'bg-ink text-cream' : 'bg-paper text-muted'}`}>{t}</span>
-                ))}
-              </div>
-              <h3 className="mt-5 flex items-center gap-2 font-medium"><ConciergeBell size={16} /> Add-ons from your host</h3>
-              <p className="mt-1.5 text-sm text-muted">Pickups, chefs and extras, booked and paid for with your stay.</p>
-            </div>
-
-            {/* Verified */}
-            <div className="card card-pad">
-              <div className="inset flex items-center gap-3 p-5">
-                <span className="grid h-9 w-9 place-items-center rounded-full bg-lime"><BadgeCheck size={16} /></span>
-                <div className="text-xs">
-                  <p className="font-medium text-ink">Identity verified</p>
-                  <p className="font-mono text-faint">NIN · Passport · Voter’s card</p>
-                </div>
-              </div>
-              <h3 className="mt-5 flex items-center gap-2 font-medium"><ShieldCheck size={16} /> Verified hosts</h3>
-              <p className="mt-1.5 text-sm text-muted">Hosts who pass an ID check get a Verified badge on every listing.</p>
-            </div>
-
-            {/* Real-time */}
-            <div className="card card-pad">
-              <div className="inset flex items-center justify-between p-5 text-xs">
-                <span className="flex items-center gap-2 text-ink"><Bell size={14} /> Booking accepted</span>
-                <span className="h-2 w-2 rounded-full bg-lime-deep" />
-              </div>
-              <h3 className="mt-5 font-medium">Updates as they happen</h3>
-              <p className="mt-1.5 text-sm text-muted">Get notified the moment a host accepts, with your check-in code in My Trips.</p>
-            </div>
+            ))}
           </div>
         </div>
       </section>
+
 
       {/* ================= TRUST (dark) ================= */}
       <section id="trust" className="bg-night text-cream">
