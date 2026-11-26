@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, useSearchParams, Link } from 'react-router-dom';
 import {
   MapPin, BadgeCheck, ShieldCheck, X, Plus, Check, Users, ArrowLeft, ArrowRight, Lock, ImageOff, ScrollText, Sparkles,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO, differenceInCalendarDays, addDays } from 'date-fns';
+import { format, parseISO, differenceInCalendarDays, addDays, startOfToday } from 'date-fns';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import api, { errorMessage } from '../utils/api';
@@ -59,8 +59,16 @@ export default function PropertyDetails() {
   const [property, setProperty] = useState(() => peek(`/Properties/${id}`) ?? null);
   const [loading, setLoading] = useState(() => !peek(`/Properties/${id}`));
 
-  const [checkIn, setCheckIn] = useState(null);
-  const [checkOut, setCheckOut] = useState(null);
+  // Dates carried over from a date search on the home page (?checkIn=…&checkOut=…)
+  const [searchParams] = useSearchParams();
+  const fromQuery = (key) => {
+    const v = searchParams.get(key);
+    const d = v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? parseISO(v) : null;
+    return d && d >= startOfToday() ? d : null;
+  };
+  const [checkIn, setCheckIn] = useState(() => fromQuery('checkIn'));
+  const [checkOut, setCheckOut] = useState(() => (fromQuery('checkIn') ? fromQuery('checkOut') : null));
+  const [reviews, setReviews] = useState(null);
   const [bookedDates, setBookedDates] = useState(() => (peek(`/Properties/${id}/booked-dates`) ?? []).map((d) => parseISO(d)));
 
   const [isCheckoutModalOpen, setIsCheckoutModalOpen] = useState(false);
@@ -91,6 +99,13 @@ export default function PropertyDetails() {
     };
     fetchPropertyAndDates();
   }, [id, navigate]);
+
+  // Reviews load separately so they never delay the page.
+  useEffect(() => {
+    let cancelled = false;
+    getCached(`/Reviews/property/${id}`).then((r) => { if (!cancelled) setReviews(r); }).catch(() => { if (!cancelled) setReviews({ count: 0, reviews: [] }); });
+    return () => { cancelled = true; };
+  }, [id]);
 
   const nights = checkIn && checkOut ? Math.max(0, differenceInCalendarDays(checkOut, checkIn)) : 0;
 
@@ -162,7 +177,12 @@ export default function PropertyDetails() {
             {property.hostVerificationStatus === 'Verified' && <span className="chip-lime"><BadgeCheck size={11} /> Verified host</span>}
           </div>
           <h1 className="text-3xl font-light tracking-[-0.035em] md:text-5xl">{property.title}</h1>
-          <p className="mt-2 flex items-center gap-1.5 text-sm text-muted"><MapPin size={14} /> {location_}</p>
+          <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
+            <span className="flex items-center gap-1.5"><MapPin size={14} /> {location_}</span>
+            {property.reviewCount > 0 && (
+              <a href="#reviews" className="text-ink hover:underline hover:underline-offset-4">★ {Number(property.rating).toFixed(1)} · {property.reviewCount} review{property.reviewCount === 1 ? '' : 's'}</a>
+            )}
+          </p>
         </div>
         <p className="shrink-0 md:text-right">
           <span className="mono text-2xl">{naira(property.pricePerNight)}</span>
@@ -235,6 +255,37 @@ export default function PropertyDetails() {
               </ul>
             </section>
           )}
+
+          <section id="reviews" className="scroll-mt-24">
+            <p className="eyebrow mb-4">Reviews</p>
+            {reviews === null ? (
+              <div className="space-y-3" aria-hidden="true">
+                <div className="skeleton h-4 w-40" /><div className="skeleton h-16 w-full" /><div className="skeleton h-16 w-full" />
+              </div>
+            ) : reviews.count === 0 ? (
+              <p className="text-sm text-muted">No reviews yet. Guests can review after their stay.</p>
+            ) : (
+              <>
+                <p className="mb-4 flex items-baseline gap-2">
+                  <span className="text-3xl font-light tracking-[-0.03em]">{Number(reviews.average).toFixed(1)}</span>
+                  <span className="text-lime-deep" aria-hidden="true">{'★'.repeat(Math.round(reviews.average))}<span className="text-line">{'★'.repeat(5 - Math.round(reviews.average))}</span></span>
+                  <span className="text-sm text-muted">from {reviews.count} review{reviews.count === 1 ? '' : 's'}</span>
+                </p>
+                <ul className="space-y-3">
+                  {reviews.reviews.map((r) => (
+                    <li key={r.id} className="card p-4">
+                      <div className="mb-1.5 flex items-center justify-between gap-3 text-sm">
+                        <span className="font-medium">{r.guestName}</span>
+                        <span className="text-xs text-faint">{format(new Date(r.createdAt), 'MMM yyyy')}</span>
+                      </div>
+                      <p className="text-sm text-lime-deep" aria-label={`${r.rating} out of 5`}>{'★'.repeat(r.rating)}<span className="text-line">{'★'.repeat(5 - r.rating)}</span></p>
+                      {r.comment && <p className="mt-1.5 whitespace-pre-line text-sm text-ink/85">{r.comment}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </section>
 
           {cautionFee > 0 && (
             <section className="inset flex gap-3 p-5">

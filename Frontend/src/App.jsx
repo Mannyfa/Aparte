@@ -6,6 +6,10 @@ import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import NotificationListener from './components/NotificationListener';
 import InstallPrompt from './components/InstallPrompt';
+import AccountBanners from './components/AccountBanners';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
+import VerifyEmail from './pages/VerifyEmail';
 
 import Login from './pages/Login';
 import Home from './pages/Home';
@@ -64,11 +68,15 @@ function Shell() {
       <NotificationListener />
       <InstallPrompt />
       <Navbar />
+      <AccountBanners />
       <main className="flex-grow">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/payment-success" element={<PaymentSuccess />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/my-trips" element={<MyTrips />} />

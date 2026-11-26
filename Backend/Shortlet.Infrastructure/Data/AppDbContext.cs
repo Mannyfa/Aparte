@@ -24,6 +24,9 @@ namespace Shortlet.Infrastructure.Data
         public DbSet<SplitGroup> SplitGroups { get; set; }
         public DbSet<SplitShare> SplitShares { get; set; }
         public DbSet<Refund> Refunds { get; set; }
+        public DbSet<CalendarFeed> CalendarFeeds { get; set; }
+        public DbSet<UserToken> UserTokens { get; set; }
+        public DbSet<PushSubscription> PushSubscriptions { get; set; }
 
 
 
@@ -62,6 +65,19 @@ namespace Shortlet.Infrastructure.Data
                 .WithMany()
                 .HasForeignKey(b => b.PropertyId)
                 .OnDelete(DeleteBehavior.Restrict); // Prevent deleting properties that have bookings
+
+            // Calendar blocks (host blocks, imported feeds) are looked up per property by date.
+            modelBuilder.Entity<PropertyCalendar>().Property(c => c.Source).HasDefaultValue("booking");
+            modelBuilder.Entity<PropertyCalendar>().HasIndex(c => new { c.PropertyId, c.EndDate });
+            modelBuilder.Entity<PropertyCalendar>().HasIndex(c => c.FeedId);
+            modelBuilder.Entity<CalendarFeed>().HasIndex(f => f.PropertyId);
+            modelBuilder.Entity<Property>().HasIndex(p => p.CalendarToken).IsUnique();
+
+            modelBuilder.Entity<UserToken>().HasIndex(t => t.TokenHash).IsUnique();
+            modelBuilder.Entity<UserToken>().HasIndex(t => new { t.UserId, t.Purpose });
+
+            modelBuilder.Entity<PushSubscription>().HasIndex(s => s.Endpoint).IsUnique();
+            modelBuilder.Entity<PushSubscription>().HasIndex(s => s.UserId);
 
             // Listings are shown newest first; booked dates are looked up per property by check-out date.
             modelBuilder.Entity<Property>().HasIndex(p => p.CreatedAt);

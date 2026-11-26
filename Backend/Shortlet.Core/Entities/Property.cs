@@ -24,7 +24,10 @@ namespace Shortlet.Core.Entities
         public double Longitude { get; set; }
         
         public string AmenitiesJson { get; set; } = "[]";
-        public string Status { get; set; } = "pending_approval"; // pending_approval, active, suspended
+        public string Status { get; set; } = "pending_approval"; // pending_approval, active, suspended, archived (deleted by host)
+
+        /// <summary>Secret part of this property's public iCal export URL (for Airbnb / Booking.com).</summary>
+        public string? CalendarToken { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
        

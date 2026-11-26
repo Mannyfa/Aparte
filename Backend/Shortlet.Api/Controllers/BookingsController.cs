@@ -37,17 +37,64 @@ namespace Shortlet.Api.Controllers
         private readonly IConfiguration _config;
         private readonly IPaystackService _paystack;
         private readonly ILogger<BookingsController> _logger;
+        private readonly Shortlet.Api.Services.BookingFinanceService _finance;
+        private readonly Shortlet.Api.Services.Notifier _notifier;
 
-        public BookingsController(AppDbContext context, IConfiguration config, IPaystackService paystack, ILogger<BookingsController> logger)
+        public BookingsController(AppDbContext context, IConfiguration config, IPaystackService paystack, ILogger<BookingsController> logger,
+            Shortlet.Api.Services.BookingFinanceService finance, Shortlet.Api.Services.Notifier notifier)
         {
             _context = context;
             _config = config;
             _paystack = paystack;
             _logger = logger;
+            _finance = finance;
+            _notifier = notifier;
         }
 
         private string FrontendUrl(string path) =>
             (_config["Frontend:BaseUrl"] ?? "https://aparteyng.vercel.app").TrimEnd('/') + path;
+
+        // =================================================================
+        // GUEST CANCELLATION
+        // =================================================================
+
+        /// <summary>What the guest would get back if they cancelled now (shown before they confirm).</summary>
+        [HttpGet("{id:guid}/cancellation-quote")]
+        [Authorize]
+        public async Task<IActionResult> GetCancellationQuote(Guid id)
+        {
+            var guestId = User.GetUserId();
+            var booking = await _context.Bookings.FirstOrDefaultAsync(b => b.Id == id && b.GuestId == guestId);
+            if (booking == null) return NotFound(new { message = "Booking not found." });
+
+            var q = await _finance.QuoteGuestCancellationAsync(booking);
+            return Ok(new
+            {
+                allowed = q.Allowed, reason = q.Reason, fullRefund = q.FullRefund,
+                paidSoFar = q.PaidSoFar, refundToGuest = q.RefundToGuest, keptByHost = q.KeptByHost, feeKept = q.FeeKept,
+                freeCancellationUntil = q.FreeCancellationUntil,
+                freeCancellationHours = _finance.FreeCancellationWindow.TotalHours
+            });
+        }
+
+        [HttpPost("{id:guid}/cancel")]
+        [Authorize]
+        public async Task<IActionResult> CancelBooking(Guid id)
+        {
+            var guestId = User.GetUserId();
+            if (guestId == null) return Unauthorized();
+
+            var (ok, message, quote) = await _finance.CancelByGuestAsync(id, guestId.Value);
+            if (!ok) return BadRequest(new { message });
+
+            var info = await _context.Bookings.Where(b => b.Id == id)
+                .Select(b => new { b.Property.HostId, b.Property.Title, b.CheckIn, b.CheckOut, GuestName = b.Guest.Name }).FirstAsync();
+            await _notifier.NotifyAsync(info.HostId, "Booking cancelled",
+                $"{info.GuestName} cancelled {info.Title} ({info.CheckIn:dd MMM}–{info.CheckOut:dd MMM})." +
+                (quote.KeptByHost > 0 ? $" You keep ₦{quote.KeptByHost:N0}." : " The dates are open again."), "/dashboard");
+            PropertiesController.InvalidatePublicCache();
+            return Ok(new { message });
+        }
 
         [HttpPost]
         [Authorize]
@@ -87,7 +134,8 @@ namespace Shortlet.Api.Controllers
                     var isOverlapping = await _context.Bookings
                         .Where(b => b.PropertyId == property.Id && checkIn < b.CheckOut && checkOut > b.CheckIn)
                         .BlockingDates(_context, now)
-                        .AnyAsync();
+                        .AnyAsync()
+                        || await BookingRules.BlocksOverlapping(_context, checkIn, checkOut).AnyAsync(c => c.PropertyId == property.Id);
 
                     if (isOverlapping)
                         return Conflict(new { message = "Oops! Some of these dates were just booked by someone else." });

@@ -23,14 +23,16 @@ namespace Shortlet.Api.Controllers
         private readonly IConfiguration _config;
         private readonly IEmailQueue _emailQueue;
         private readonly BookingFinanceService _finance;
+        private readonly Notifier _notifier;
         private readonly ILogger<WebhooksController> _logger;
 
-        public WebhooksController(AppDbContext context, IConfiguration config, IEmailQueue emailQueue, BookingFinanceService finance, ILogger<WebhooksController> logger)
+        public WebhooksController(AppDbContext context, IConfiguration config, IEmailQueue emailQueue, BookingFinanceService finance, ILogger<WebhooksController> logger, Notifier notifier)
         {
             _context = context;
             _config = config;
             _emailQueue = emailQueue;
             _finance = finance;
+            _notifier = notifier;
             _logger = logger;
         }
 
@@ -191,6 +193,11 @@ namespace Shortlet.Api.Controllers
                                 (b.Status == "paid" || b.Status == "confirmed" || b.Status == "completed"))
                     .FirstOrDefaultAsync();
 
+                // Dates imported from Airbnb / Booking.com while the guest was paying also count (prevents double bookings).
+                var importedBlock = conflict == null && await BookingRules.BlocksOverlapping(_context, booking.CheckIn, booking.CheckOut)
+                    .AnyAsync(c => c.PropertyId == booking.PropertyId && c.Source == "feed");
+                if (importedBlock) conflict = booking; // any non-null value marks the conflict
+
                 if (conflict == null)
                 {
                     booking.Status = "paid";
@@ -241,6 +248,12 @@ namespace Shortlet.Api.Controllers
                        $"({booking.CheckIn:dd MMM yyyy} – {booking.CheckOut:dd MMM yyyy}). " +
                        "Your host will confirm shortly and you'll receive your check-in code by email.</p>"
             });
+
+            // Tell the host straight away: they need to accept before check-in.
+            await _notifier.NotifyAsync(booking.Property.HostId, "New booking request 🔔",
+                $"{booking.Guest.Name} paid for {booking.Property.Title} ({booking.CheckIn:dd MMM}–{booking.CheckOut:dd MMM}). Accept or decline it.",
+                "/dashboard");
+            Shortlet.Api.Controllers.PropertiesController.InvalidatePublicCache(); // dates are now taken
         }
 
         // ------------------------------------------------------------------

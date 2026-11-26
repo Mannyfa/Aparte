@@ -5,7 +5,7 @@
  * - Built assets (/assets/*, hashed filenames) and icons: cache first. They never change once built.
  * - Everything else (API calls, Paystack, Cloudinary, other sites): not touched at all.
  */
-const VERSION = 'apartey-v1';
+const VERSION = 'apartey-v2';
 const SHELL = ['/', '/offline.html', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/apple-touch-icon.png', '/favicon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -56,4 +56,39 @@ self.addEventListener('fetch', (event) => {
       )
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Push notifications (bookings, payments, messages). Payload: { title, body, url, tag }
+// ---------------------------------------------------------------------------
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data && event.data.text() }; }
+  const title = data.title || 'Apartey';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: data.tag || undefined,
+      data: { url: data.url || '/' },
+    })
+  );
+});
+
+// Tapping a notification focuses an open Apartey window (or opens one) on the right page.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      for (const w of windows) {
+        if (w.url.startsWith(self.location.origin) && 'focus' in w) {
+          w.navigate(target).catch(() => {});
+          return w.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    })
+  );
 });

@@ -24,14 +24,16 @@ namespace Shortlet.Api.Services
         private readonly IEmailQueue _email;
         private readonly IConfiguration _config;
         private readonly ILogger<BookingFinanceService> _logger;
+        private readonly Notifier _notifier;
 
-        public BookingFinanceService(AppDbContext db, IPaystackService paystack, IEmailQueue email, IConfiguration config, ILogger<BookingFinanceService> logger)
+        public BookingFinanceService(AppDbContext db, IPaystackService paystack, IEmailQueue email, IConfiguration config, ILogger<BookingFinanceService> logger, Notifier notifier)
         {
             _db = db;
             _paystack = paystack;
             _email = email;
             _config = config;
             _logger = logger;
+            _notifier = notifier;
         }
 
         /// <summary>How long after check-out a host has to claim from the caution fee before it auto-returns to the guest.</summary>
@@ -124,25 +126,144 @@ namespace Shortlet.Api.Services
         /// Returns <paramref name="amountToGuest"/> of the caution fee. For split bookings it is spread over
         /// each friend's payment in proportion to what they paid.
         /// </summary>
-        public async Task<bool> RefundCautionAsync(Booking booking, decimal amountToGuest)
+        public async Task<bool> RefundCautionAsync(Booking booking, decimal amountToGuest) =>
+            amountToGuest <= 0 || await RefundProRataAsync(booking.Id, await PaymentsForAsync(booking), amountToGuest, PurposeCaution, "Caution fee returned");
+
+        /// <summary>
+        /// Refunds <paramref name="amount"/> spread over the given payments in proportion to what each paid
+        /// (one payment for a solo booking, one per friend for a split). Full payments are refunded in full.
+        /// </summary>
+        public async Task<bool> RefundProRataAsync(Guid bookingId, List<(string Reference, decimal Amount)> payments, decimal amount, string purpose, string note)
         {
-            if (amountToGuest <= 0) return true;
-            var payments = await PaymentsForAsync(booking);
+            if (amount <= 0) return true;
             if (payments.Count == 0) return false;
 
             var total = payments.Sum(p => p.Amount);
+            amount = Math.Min(amount, total);
             var allOk = true;
             decimal allocated = 0;
             for (var i = 0; i < payments.Count; i++)
             {
                 var portion = i == payments.Count - 1
-                    ? amountToGuest - allocated
-                    : Math.Round(amountToGuest * payments[i].Amount / total, 2);
+                    ? amount - allocated
+                    : Math.Round(amount * payments[i].Amount / total, 2);
                 allocated += portion;
                 if (portion <= 0) continue;
-                allOk &= await RefundOnceAsync(booking.Id, payments[i].Reference, portion, partial: true, PurposeCaution, "Caution fee returned");
+                var partial = portion < payments[i].Amount;
+                allOk &= await RefundOnceAsync(bookingId, payments[i].Reference, portion, partial, purpose, note);
             }
             return allOk;
+        }
+
+        // ------------------------------------------------------------------
+        // Guest cancellation policy
+        // ------------------------------------------------------------------
+
+        /// <summary>Check-in happens at 2pm Lagos time (13:00 UTC) on the check-in date.</summary>
+        public static DateTime CheckInMoment(Booking b) => b.CheckIn.Date.AddHours(13);
+
+        public TimeSpan FreeCancellationWindow =>
+            TimeSpan.FromHours(int.TryParse(_config["Policy:FreeCancellationHours"], out var h) && h >= 0 ? h : 48);
+
+        public record CancellationQuote(
+            bool Allowed, string? Reason, bool FullRefund,
+            decimal PaidSoFar, decimal RefundToGuest, decimal KeptByHost, decimal FeeKept,
+            DateTime FreeCancellationUntil);
+
+        /// <summary>
+        /// The platform-wide policy:
+        ///  • 48 hours or more before check-in → full refund.
+        ///  • Less than 48 hours → half the room rate goes to the host; the 5% fee is kept; the rest
+        ///    (the other half of the room rate, add-ons and the caution fee) is refunded.
+        ///  • Unpaid bookings and split groups still collecting money cancel for free (anyone who paid gets it all back).
+        ///  • Once the stay has started it can't be cancelled here.
+        /// </summary>
+        public async Task<CancellationQuote> QuoteGuestCancellationAsync(Booking b)
+        {
+            var now = DateTime.UtcNow;
+            var freeUntil = CheckInMoment(b) - FreeCancellationWindow;
+            CancellationQuote No(string reason) => new(false, reason, false, 0, 0, 0, 0, freeUntil);
+
+            if (b.Status is not ("pending" or "split_pending" or "paid" or "confirmed"))
+                return No($"This booking is already {b.Status}.");
+            if (now >= CheckInMoment(b))
+                return No("Your stay has already started, so it can't be cancelled online.");
+
+            var payments = await PaymentsForAsync(b);
+            var paid = payments.Sum(p => p.Amount);
+
+            if (b.Status is "pending" or "split_pending" || now <= freeUntil)
+                return new(true, null, true, paid, paid, 0, 0, freeUntil);
+
+            var addOns = await _db.BookingAddOns.Where(a => a.BookingId == b.Id).SumAsync(a => a.Price);
+            var roomWithFee = b.TotalPrice - b.CautionFeeAmount - addOns;
+            var room = roomWithFee / (1 + BookingRules.PlatformFeeRate);
+            var fee = Math.Round(roomWithFee - room, 2);
+            var keptByHost = Math.Round(room * 0.5m, 2);
+            var refund = Math.Max(0, b.TotalPrice - fee - keptByHost);
+            return new(true, null, false, paid, refund, keptByHost, fee, freeUntil);
+        }
+
+        /// <summary>Cancels a guest's booking according to <see cref="QuoteGuestCancellationAsync"/>.</summary>
+        public async Task<(bool Ok, string Message, CancellationQuote Quote)> CancelByGuestAsync(Guid bookingId, Guid guestId)
+        {
+            var booking = await _db.Bookings.Include(b => b.Property).Include(b => b.Guest)
+                .FirstOrDefaultAsync(b => b.Id == bookingId && b.GuestId == guestId);
+            if (booking == null) return (false, "Booking not found.", new(false, "Not found", false, 0, 0, 0, 0, DateTime.UtcNow));
+
+            var quote = await QuoteGuestCancellationAsync(booking);
+            if (!quote.Allowed) return (false, quote.Reason!, quote);
+
+            if (quote.FullRefund)
+            {
+                await CancelAndRefundAsync(booking.Id, "cancelled", "Guest cancelled", "You cancelled this booking.");
+                return (true, quote.PaidSoFar > 0 ? $"Booking cancelled. ₦{quote.RefundToGuest:N0} is being refunded." : "Booking cancelled.", quote);
+            }
+
+            // Late cancellation: the host keeps half the room rate, the rest is refunded.
+            List<(string Reference, decimal Amount)> payments;
+            await using (var tx = await _db.Database.BeginTransactionAsync())
+            {
+                await WalletLedger.LockBookingAsync(_db, booking.Id);
+                await _db.Entry(booking).ReloadAsync();
+                if (booking.Status is not ("paid" or "confirmed")) return (false, "This booking changed while you were cancelling. Please refresh.", quote);
+
+                payments = await PaymentsForAsync(booking); // before the status changes
+
+                var credited = await _db.Transactions.Where(t => t.Reference == booking.Id.ToString() && t.Type == "Credit").SumAsync(t => t.Amount);
+                var reverse = Math.Max(0, credited - quote.KeptByHost);
+                if (reverse > 0 && !await _db.Transactions.AnyAsync(t => t.Reference == booking.Id + "_refund"))
+                {
+                    var wallet = await WalletLedger.LockWalletAsync(_db, booking.Property.HostId);
+                    wallet.Balance -= reverse;
+                    wallet.UpdatedAt = DateTime.UtcNow;
+                    _db.Transactions.Add(new Transaction
+                    {
+                        WalletId = wallet.Id,
+                        Amount = reverse,
+                        Type = "Debit",
+                        Description = $"Late cancellation by guest (you keep ₦{quote.KeptByHost:N0})",
+                        Reference = booking.Id + "_refund"
+                    });
+                }
+
+                if (booking.CautionFeeStatus is "Held" or "Pending") booking.CautionFeeStatus = "Refunded";
+                booking.Status = "cancelled";
+                await _db.SaveChangesAsync();
+                await tx.CommitAsync();
+            }
+
+            await RefundProRataAsync(booking.Id, payments, quote.RefundToGuest, PurposeBooking, "Late cancellation (partial refund)");
+            await _email.QueueEmailAsync(new EmailMessagePayload
+            {
+                ToEmail = booking.Guest.Email,
+                Subject = $"Cancellation confirmed: {booking.Property.Title}",
+                Body = $"<p>Your booking at <strong>{System.Net.WebUtility.HtmlEncode(booking.Property.Title)}</strong> is cancelled.</p>" +
+                       $"<p>Because it was cancelled less than {FreeCancellationWindow.TotalHours:0} hours before check-in, " +
+                       $"₦{quote.KeptByHost:N0} (half the room rate) goes to the host and the ₦{quote.FeeKept:N0} service fee isn't refundable. " +
+                       $"₦{quote.RefundToGuest:N0} is being refunded to you, usually within 5–10 working days.</p>"
+            });
+            return (true, $"Booking cancelled. ₦{quote.RefundToGuest:N0} is being refunded.", quote);
         }
 
         // ------------------------------------------------------------------
@@ -210,6 +331,7 @@ namespace Shortlet.Api.Services
                 Body = $"<p>Hi {System.Net.WebUtility.HtmlEncode(booking.Guest.Name)},</p><p>{System.Net.WebUtility.HtmlEncode(guestMessage)}</p>" +
                        "<p>Any payment for this booking is being refunded to the card or account it came from. Refunds usually arrive within 5–10 working days.</p>"
             });
+            await _notifier.NotifyAsync(booking.GuestId, "Booking cancelled", $"{guestMessage} Any payment is being refunded.", "/my-trips");
             return refunded;
         }
 
@@ -279,6 +401,10 @@ namespace Shortlet.Api.Services
                       $"{System.Net.WebUtility.HtmlEncode(booking.CautionClaimReason)}.</p>" +
                       (toGuest > 0 ? $"<p>The remaining ₦{toGuest:N0} is being refunded to you.</p>" : "")
             });
+            await _notifier.NotifyAsync(booking.GuestId, "Caution fee update",
+                booking.CautionClaimAmount <= 0
+                    ? $"Your ₦{booking.CautionFeeAmount:N0} caution fee for {booking.Property.Title} is being refunded."
+                    : $"Your host kept ₦{booking.CautionClaimAmount:N0} of your caution fee for {booking.Property.Title}.", "/my-trips");
             return (true, booking.CautionFeeStatus switch
             {
                 "Refunded" => "Caution fee returned to the guest.",

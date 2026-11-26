@@ -12,7 +12,8 @@ namespace Shortlet.Core.Entities
         
         // Roles: guest, host, admin
         public string Role { get; set; } = "guest"; 
-        public bool IsVerified { get; set; } = false;
+        public bool IsVerified { get; set; } = false; // identity (KYC) approved by an admin
+        public bool EmailConfirmed { get; set; } = false;
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // --- KYC & Verification Fields ---

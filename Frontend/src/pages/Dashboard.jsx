@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard, Home as HomeIcon, ClipboardList, Wallet, ShieldCheck, Plus, Upload, Check, X, RefreshCw,
-  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff, Lock,
+  ArrowRight, ArrowLeft, KeyRound, BadgeCheck, Clock, ImageOff, Lock, CalendarDays, Pencil, Trash2,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
@@ -11,6 +11,7 @@ import { OverviewSkeleton, ListingCardsSkeleton, ListSkeleton, WalletSkeleton, B
 import { EmptyState, StatusBadge, Modal, CautionChip } from '../components/ui';
 import { naira, formatDay, formatDateTime, nightsBetween, initials, img } from '../utils/format';
 import { invalidate } from '../utils/cache';
+import HostCalendar from '../components/HostCalendar';
 
 function PageHead({ eyebrow, title, lead, action }) {
   return (
@@ -38,6 +39,9 @@ export default function Dashboard() {
   }, [activeTab]);
 
   const [isAddingListing, setIsAddingListing] = useState(false);
+  const [editingId, setEditingId] = useState(null);         // listing being edited (null = creating)
+  const [existingImages, setExistingImages] = useState([]); // photos already on the listing being edited
+  const [calendarPropertyId, setCalendarPropertyId] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -198,9 +202,46 @@ export default function Dashboard() {
     setAddOns(addOns.filter(a => a.id !== id));
   };
 
+  const resetListingForm = () => {
+    setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '' });
+    setSelectedImages([]); setSelectedAmenities([]); setSelectedRules([]); setAddOns([]); setNewAddOn({ name: '', description: '', price: '' });
+    setEditingId(null); setExistingImages([]);
+  };
+
+  const closeListingForm = () => { resetListingForm(); setIsAddingListing(false); };
+
+  // Open the listing form pre-filled with an existing listing.
+  const startEdit = (p) => {
+    setFormData({
+      title: p.title || '', description: p.description || '', type: p.type || 'Apartment',
+      pricePerNight: p.pricePerNight ?? '', cautionFee: p.cautionFee || '', city: p.city || '', state: p.state || '', area: p.area || '',
+    });
+    setSelectedAmenities(p.amenities || []);
+    setSelectedRules(p.houseRules || []);
+    setAddOns((p.addOns || []).map((a) => ({ id: a.id, name: a.name, description: a.description, price: a.price })));
+    setExistingImages(p.imageUrls || []);
+    setSelectedImages([]);
+    setEditingId(p.id);
+    setIsAddingListing(true);
+    window.scrollTo({ top: 0 });
+  };
+
+  const handleDeleteListing = async (p) => {
+    if (!window.confirm(`Delete “${p.title}”? Guests won't be able to find or book it any more. Past bookings stay in your history.`)) return;
+    try {
+      const res = await api.delete(`/Properties/${p.id}`);
+      toast.success(res.data?.message || 'Listing deleted.');
+      setHostProperties((list) => list.filter((x) => x.id !== p.id));
+      invalidate('/Properties');
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't delete this listing."));
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (selectedImages.length === 0) return toast.error("Please upload at least one image.");
+    if (selectedImages.length + existingImages.length === 0) return toast.error("Please add at least one photo.");
+    if (selectedImages.length + existingImages.length > 5) return toast.error("A listing can have up to 5 photos.");
 
     setLoading(true);
     try {
@@ -221,17 +262,20 @@ export default function Dashboard() {
 
       selectedImages.forEach(image => submitData.append('images', image));
 
-      await api.post('/Properties', submitData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      toast.success('Property listed successfully!');
-      invalidate('/Properties'); // so the new listing shows on the home page straight away
-      
-      setIsAddingListing(false); 
-      setFormData({ title: '', description: '', type: 'Apartment', pricePerNight: '', cautionFee: '', city: '', state: '', area: '' });
-      setSelectedImages([]); setSelectedAmenities([]); setSelectedRules([]); setAddOns([]); setNewAddOn({ name: '', description: '', price: '' });
-      
+      if (editingId) {
+        submitData.append('KeepImageUrlsJson', JSON.stringify(existingImages));
+        await api.put(`/Properties/${editingId}`, submitData);
+        toast.success('Listing updated.');
+      } else {
+        await api.post('/Properties', submitData);
+        toast.success('Property listed successfully!');
+      }
+      invalidate('/Properties'); // so changes show on the home page straight away
+
+      closeListingForm();
       if (activeTab === 'listings') { setActiveTab('overview'); setTimeout(() => setActiveTab('listings'), 100); }
     } catch (error) {
-      toast.error(errorMessage(error, 'Failed to list property.'));
+      toast.error(errorMessage(error, editingId ? 'Failed to save changes.' : 'Failed to list property.'));
     } finally {
       setLoading(false);
     }
@@ -395,6 +439,7 @@ export default function Dashboard() {
     { id: 'overview', icon: LayoutDashboard, label: 'Overview' },
     { id: 'listings', icon: HomeIcon, label: 'Listings' },
     { id: 'bookings', icon: ClipboardList, label: 'Bookings' },
+    { id: 'calendar', icon: CalendarDays, label: 'Calendar' },
     { id: 'earnings', icon: Wallet, label: 'Earnings' },
     { id: 'verification', icon: ShieldCheck, label: 'Verification' },
   ];
@@ -415,6 +460,7 @@ export default function Dashboard() {
       toast.error('Standard hosts can list 2 properties. Verify your ID to unlock unlimited listings.');
       setActiveTab('verification');
     } else {
+      resetListingForm();
       setIsAddingListing(true);
       setActiveTab('listings');
     }
@@ -492,8 +538,8 @@ export default function Dashboard() {
 
   const renderListingForm = () => (
     <div className="animate-fade-in">
-      <button onClick={() => setIsAddingListing(false)} className="btn-ghost btn-sm -ml-3 mb-4"><ArrowLeft size={14} /> Back to listings</button>
-      <PageHead eyebrow="New listing" title="List a place" lead="Fill in the details guests need. You can list up to 5 photos." />
+      <button onClick={closeListingForm} className="btn-ghost btn-sm -ml-3 mb-4"><ArrowLeft size={14} /> Back to listings</button>
+      <PageHead eyebrow={editingId ? "Edit listing" : "New listing"} title={editingId ? (formData.title || "Edit listing") : "List a place"} lead={editingId ? "Changes apply to new bookings. Existing bookings keep the price they paid." : "Fill in the details guests need. You can list up to 5 photos."} />
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <section className="card card-pad">
@@ -593,7 +639,24 @@ export default function Dashboard() {
 
         <section className="card card-pad">
           <p className="eyebrow mb-5">05 · Photos</p>
-          <input type="file" multiple accept="image/*" onChange={(e) => setSelectedImages(Array.from(e.target.files).slice(0, 5))} className="sr-only" id="property-images" />
+          {existingImages.length > 0 && (
+            <div className="mb-4">
+              <p className="mb-2 text-xs text-muted">Current photos. The first one is the cover; tap × to remove.</p>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {existingImages.map((url, i) => (
+                  <div key={url} className="relative h-20 w-28 shrink-0 overflow-hidden rounded-lg bg-sand">
+                    <img src={img(url, 240)} alt="" className="h-full w-full object-cover" />
+                    {i === 0 && <span className="chip-lime absolute bottom-1 left-1">Cover</span>}
+                    <button type="button" onClick={() => setExistingImages((list) => list.filter((u) => u !== url))}
+                      className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-full bg-ink/80 text-cream" aria-label="Remove photo">
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <input type="file" multiple accept="image/*" onChange={(e) => setSelectedImages(Array.from(e.target.files).slice(0, Math.max(0, 5 - existingImages.length)))} className="sr-only" id="property-images" />
           <label htmlFor="property-images" className="flex cursor-pointer flex-col items-center rounded-xl border border-dashed border-line bg-cream px-6 py-10 text-center transition-colors hover:bg-sand/60">
             <span className="mb-3 grid h-10 w-10 place-items-center rounded-lg bg-paper"><Upload size={18} /></span>
             <span className="text-sm font-medium">{selectedImages.length > 0 ? `${selectedImages.length} photo${selectedImages.length > 1 ? 's' : ''} selected` : 'Choose photos'}</span>
@@ -609,9 +672,9 @@ export default function Dashboard() {
         </section>
 
         <div className="flex justify-end gap-2 pb-6">
-          <button type="button" onClick={() => setIsAddingListing(false)} className="btn-ghost btn-lg">Cancel</button>
+          <button type="button" onClick={closeListingForm} className="btn-ghost btn-lg">Cancel</button>
           <button type="submit" disabled={loading} className="btn-ink btn-lg">
-            {loading ? <><RefreshCw size={16} className="animate-spin" /> Publishing…</> : <><Check size={16} /> Publish listing</>}
+            {loading ? <><RefreshCw size={16} className="animate-spin" /> {editingId ? "Saving…" : "Publishing…"}</> : <><Check size={16} /> {editingId ? "Save changes" : "Publish listing"}</>}
           </button>
         </div>
       </form>
@@ -637,18 +700,28 @@ export default function Dashboard() {
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {hostProperties.map((p) => (
-              <Link key={p.id} to={`/property/${p.id}`} className="card group overflow-hidden transition-shadow hover:shadow-lift">
-                <div className="aspect-[16/10] bg-sand">
-                  {p.imageUrls?.length > 0
-                    ? <img src={img(p.imageUrls[0], 480)} alt={p.title} loading="lazy" decoding="async" className="h-full w-full object-cover" />
-                    : <div className="grid h-full place-items-center text-faint"><ImageOff size={18} /></div>}
+              <div key={p.id} className="card flex flex-col overflow-hidden">
+                <Link to={`/property/${p.id}`} className="group block">
+                  <div className="aspect-[16/10] bg-sand">
+                    {p.imageUrls?.length > 0
+                      ? <img src={img(p.imageUrls[0], 480)} alt={p.title} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                      : <div className="grid h-full place-items-center text-faint"><ImageOff size={18} /></div>}
+                  </div>
+                  <div className="p-4 pb-3">
+                    <p className="truncate font-medium group-hover:underline group-hover:underline-offset-4">{p.title}</p>
+                    <p className="mt-0.5 text-xs text-muted">{[p.city, p.state].filter(Boolean).join(', ')}</p>
+                    <p className="mt-3 flex items-center justify-between">
+                      <span><span className="mono">{naira(p.pricePerNight)}</span><span className="text-xs text-faint"> / night</span></span>
+                      {p.reviewCount > 0 && <span className="text-xs text-muted">★ {Number(p.rating).toFixed(1)} ({p.reviewCount})</span>}
+                    </p>
+                  </div>
+                </Link>
+                <div className="mt-auto flex gap-1 border-t border-line p-2">
+                  <button onClick={() => startEdit(p)} className="btn-ghost btn-sm flex-1"><Pencil size={13} /> Edit</button>
+                  <button onClick={() => { setCalendarPropertyId(p.id); setActiveTab('calendar'); }} className="btn-ghost btn-sm flex-1"><CalendarDays size={13} /> Calendar</button>
+                  <button onClick={() => handleDeleteListing(p)} className="btn-ghost btn-sm text-red-700 hover:bg-red-50" aria-label={`Delete ${p.title}`}><Trash2 size={13} /></button>
                 </div>
-                <div className="p-4">
-                  <p className="truncate font-medium">{p.title}</p>
-                  <p className="mt-0.5 text-xs text-muted">{[p.city, p.state].filter(Boolean).join(', ')}</p>
-                  <p className="mt-3 border-t border-line pt-3"><span className="mono">{naira(p.pricePerNight)}</span><span className="text-xs text-faint"> / night</span></p>
-                </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}
@@ -969,13 +1042,13 @@ export default function Dashboard() {
       {/* Sidebar (desktop) / tab strip (mobile) */}
       <aside className="md:sticky md:top-24 md:self-start">
         <p className="eyebrow mb-3 hidden text-faint md:block">Host</p>
-        <nav className="-mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-col md:px-0" aria-label="Dashboard">
+        <nav className="no-scrollbar -mx-4 flex gap-1 overflow-x-auto px-4 pb-1 md:mx-0 md:flex-col md:px-0" aria-label="Dashboard">
           {sidebarLinks.map((link) => {
             const active = tab === link.id;
             return (
               <button
                 key={link.id}
-                onClick={() => { setActiveTab(link.id); setIsAddingListing(false); }}
+                onClick={() => { setActiveTab(link.id); closeListingForm(); }}
                 aria-current={active ? 'page' : undefined}
                 className={`flex shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors ${active ? 'bg-ink text-cream' : 'text-muted hover:bg-paper hover:text-ink'}`}
               >
@@ -996,6 +1069,7 @@ export default function Dashboard() {
         {tab === 'bookings' && renderBookings()}
         {tab === 'earnings' && renderEarnings()}
         {tab === 'verification' && renderVerification()}
+        {tab === 'calendar' && <HostCalendar initialPropertyId={calendarPropertyId} />}
       </section>
     </div>
   );

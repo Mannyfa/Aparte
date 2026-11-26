@@ -25,11 +25,13 @@ namespace Shortlet.Api.Controllers
 
         private readonly AppDbContext _context;
         private readonly IHubContext<ChatHub> _hubContext;
+        private readonly Shortlet.Api.Services.Notifier _notifier;
 
-        public MessagesController(AppDbContext context, IHubContext<ChatHub> hubContext)
+        public MessagesController(AppDbContext context, IHubContext<ChatHub> hubContext, Shortlet.Api.Services.Notifier notifier)
         {
             _context = context;
             _hubContext = hubContext;
+            _notifier = notifier;
         }
 
         /// <summary>
@@ -102,6 +104,11 @@ namespace Shortlet.Api.Controllers
                 timestamp = message.Timestamp,
                 isMine = false
             });
+
+            // Push to the receiver's devices too (the live event above covers open tabs).
+            var senderName = await _context.Users.Where(u => u.Id == myId.Value).Select(u => u.Name).FirstOrDefaultAsync() ?? "Someone";
+            await _notifier.NotifyAsync(request.ReceiverId, $"Message from {senderName}",
+                content.Length > 140 ? content[..140] + "…" : content, "/", "ReceiveMessage", live: false);
 
             return Ok(new { id = message.Id, content = message.Content, timestamp = message.Timestamp, isMine = true });
         }

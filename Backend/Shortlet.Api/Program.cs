@@ -91,6 +91,17 @@ builder.Services.AddMemoryCache(); // bank list cache
 builder.Services.AddScoped<Shortlet.Api.Services.BookingFinanceService>();
 builder.Services.AddHostedService<Shortlet.Api.Services.MoneyMaintenanceWorker>();
 
+// Notifications (live + web push), account emails, and calendar sync with Airbnb / Booking.com.
+builder.Services.AddScoped<Shortlet.Api.Services.Notifier>();
+builder.Services.AddScoped<Shortlet.Api.Services.AccountTokenService>();
+builder.Services.AddScoped<Shortlet.Api.Services.CalendarSyncService>();
+builder.Services.AddHostedService<Shortlet.Api.Services.CalendarSyncWorker>();
+builder.Services.AddHttpClient(Shortlet.Api.Services.CalendarSyncService.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(20);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("Apartey-CalendarSync/1.0");
+}).ConfigurePrimaryHttpMessageHandler(Shortlet.Api.Services.CalendarSyncService.CreateSafeHandler);
+
 // Cloudinary is created lazily so a missing config only breaks uploads, not the whole API.
 builder.Services.AddSingleton(sp => new Lazy<Cloudinary>(() =>
 {

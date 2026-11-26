@@ -12,6 +12,9 @@ import PropertyMap from '../components/PropertyMap';
 import { EmptyState, SectionHeader } from '../components/ui';
 import { PropertyGridSkeleton } from '../components/Skeletons';
 import { naira, img } from '../utils/format';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
+import { format } from 'date-fns';
 
 const PROPERTY_TYPES = ['Apartment', 'Penthouse', 'Duplex', 'Studio'];
 
@@ -133,6 +136,9 @@ function PropertyCard({ property, onOpen }) {
         <p className="mt-1 flex items-center gap-1 text-[13px] text-muted">
           <MapPin size={13} className="shrink-0" />
           <span className="truncate">{[property.area, property.city].filter(Boolean).join(', ')}</span>
+          {property.reviewCount > 0 && (
+            <span className="ml-auto shrink-0 text-ink">★ {Number(property.rating).toFixed(1)} <span className="text-faint">({property.reviewCount})</span></span>
+          )}
         </p>
         <div className="mt-4 flex items-end justify-between border-t border-line pt-3">
           <p>
@@ -160,13 +166,16 @@ function FaqItem({ q, a, open, onToggle }) {
   );
 }
 
-const searchUrl = ({ page, searchTerm, filterType, maxPrice }) => {
+const searchUrl = ({ page, searchTerm, filterType, maxPrice, checkIn, checkOut }) => {
   const params = new URLSearchParams({ page, pageSize: 6 });
   if (searchTerm) params.append('searchTerm', searchTerm);
   if (filterType) params.append('type', filterType);
   if (maxPrice) params.append('maxPrice', maxPrice);
+  if (checkIn && checkOut) { params.append('checkIn', checkIn); params.append('checkOut', checkOut); }
   return `/Properties/search?${params.toString()}`;
 };
+
+const ymd = (d) => (d ? format(d, 'yyyy-MM-dd') : null);
 
 export default function Home() {
   // Coming back to the home page shows the last results instantly (then refreshes quietly).
@@ -180,6 +189,8 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const [dates, setDates] = useState([null, null]); // [check-in, check-out]
+  const [appliedDates, setAppliedDates] = useState([null, null]); // dates of the results on screen
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(initial?.totalPages ?? 1);
   const [totalItems, setTotalItems] = useState(initial?.totalItems ?? 0);
@@ -194,7 +205,10 @@ export default function Home() {
   };
 
   const fetchProperties = async () => {
-    const url = searchUrl({ page, searchTerm, filterType, maxPrice });
+    // Only a complete range filters by availability.
+    const [ci, co] = dates[0] && dates[1] ? dates : [null, null];
+    setAppliedDates([ci, co]);
+    const url = searchUrl({ page, searchTerm, filterType, maxPrice, checkIn: ymd(ci), checkOut: ymd(co) });
     const cached = peek(url);
     if (cached) show(cached); // instant, then refresh below if it's stale
     else setLoading(true);
@@ -245,7 +259,7 @@ export default function Home() {
 
           {/* Search */}
           <form onSubmit={handleSearch} className="mt-9 rounded-2xl border border-line bg-paper p-2 shadow-soft">
-            <div className="grid grid-cols-1 gap-1 sm:grid-cols-[1.4fr_1fr_1fr_auto]">
+            <div className="grid grid-cols-1 gap-1 sm:grid-cols-[1fr_1.15fr_auto]">
               <label className="flex min-w-0 flex-col rounded-xl px-3 py-2 transition-colors focus-within:bg-sand/60 hover:bg-sand/40">
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-faint">Where</span>
                 <input
@@ -255,6 +269,26 @@ export default function Home() {
                   className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-faint"
                 />
               </label>
+              <label className="flex min-w-0 flex-col rounded-xl px-3 py-2 transition-colors focus-within:bg-sand/60 hover:bg-sand/40">
+                <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-faint">When</span>
+                <DatePicker
+                  selectsRange
+                  startDate={dates[0]}
+                  endDate={dates[1]}
+                  onChange={(range) => setDates(range)}
+                  minDate={new Date()}
+                  monthsShown={1}
+                  isClearable
+                  placeholderText="Any dates"
+                  dateFormat="d MMM"
+                  className="w-full min-w-0 cursor-pointer bg-transparent text-sm outline-none placeholder:text-faint"
+                />
+              </label>
+              <button type="submit" className="btn-ink btn-lg rounded-xl">
+                <Search size={16} /> <span className="sm:hidden lg:inline">Search</span>
+              </button>
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-1 border-t border-line pt-1">
               <label className="flex min-w-0 flex-col rounded-xl px-3 py-2 transition-colors focus-within:bg-sand/60 hover:bg-sand/40">
                 <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-faint">Type</span>
                 <select value={filterType} onChange={(e) => setFilterType(e.target.value)} className="w-full min-w-0 cursor-pointer bg-transparent text-sm outline-none">
@@ -273,9 +307,6 @@ export default function Home() {
                   className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-faint"
                 />
               </label>
-              <button type="submit" className="btn-ink btn-lg rounded-xl">
-                <Search size={16} /> <span className="sm:hidden lg:inline">Search</span>
-              </button>
             </div>
           </form>
 
@@ -298,7 +329,7 @@ export default function Home() {
             <SectionHeader
               eyebrow="Available now"
               title="Stays across Nigeria"
-              lead={loading ? 'Looking for places…' : `${totalItems} ${totalItems === 1 ? 'place' : 'places'} match your search.`}
+              lead={loading ? 'Looking for places…' : `${totalItems} ${totalItems === 1 ? 'place' : 'places'} ${appliedDates[0] ? `free ${format(appliedDates[0], 'd MMM')} → ${format(appliedDates[1], 'd MMM')}` : 'match your search'}.`}
             />
             <div className="segmented self-start md:self-auto">
               <button aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')} className="flex items-center gap-1.5">
@@ -323,7 +354,7 @@ export default function Home() {
           ) : (
             <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
               {properties.map((p) => (
-                <PropertyCard key={p.id} property={p} onOpen={() => navigate(`/property/${p.id}`)} />
+                <PropertyCard key={p.id} property={p} onOpen={() => navigate(`/property/${p.id}${appliedDates[0] ? `?checkIn=${ymd(appliedDates[0])}&checkOut=${ymd(appliedDates[1])}` : ''}`)} />
               ))}
             </div>
           )}

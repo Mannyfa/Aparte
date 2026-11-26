@@ -69,6 +69,38 @@ namespace Shortlet.Api.Controllers
             }
         }
 
+        // PUBLIC: reviews shown on a listing (first name + initial only)
+        [HttpGet("property/{propertyId:guid}")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetPropertyReviews(Guid propertyId, [FromQuery] int take = 20)
+        {
+            take = Math.Clamp(take, 1, 50);
+            var rows = await _context.Reviews
+                .Where(r => r.PropertyId == propertyId)
+                .OrderByDescending(r => r.CreatedAt)
+                .Take(take)
+                .Select(r => new { r.Id, r.Rating, r.Comment, r.CreatedAt, GuestName = r.Guest.Name })
+                .ToListAsync();
+
+            var stats = await _context.Reviews.Where(r => r.PropertyId == propertyId)
+                .GroupBy(_ => 1)
+                .Select(g => new { Count = g.Count(), Average = g.Average(r => r.Rating) })
+                .FirstOrDefaultAsync();
+
+            static string ShortName(string name)
+            {
+                var parts = (name ?? "").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                return parts.Length switch { 0 => "Guest", 1 => parts[0], _ => $"{parts[0]} {parts[^1][0]}." };
+            }
+
+            return Ok(new
+            {
+                count = stats?.Count ?? 0,
+                average = stats == null ? (double?)null : Math.Round(stats.Average, 1),
+                reviews = rows.Select(r => new { r.Id, r.Rating, r.Comment, r.CreatedAt, guestName = ShortName(r.GuestName) })
+            });
+        }
+
         // 2. POST: GUEST LEAVES A REVIEW
         [HttpPost]
         public async Task<IActionResult> CreateReview([FromBody] CreateReviewDto request)
@@ -111,6 +143,7 @@ namespace Shortlet.Api.Controllers
 
                 _context.Reviews.Add(review);
                 await _context.SaveChangesAsync();
+                PropertiesController.InvalidatePublicCache(); // new rating shows on the listing right away
 
                 return Ok(new { message = "Review submitted successfully!" });
             }

@@ -26,14 +26,14 @@ namespace Shortlet.Api.Controllers
         private readonly AppDbContext _context;
         private readonly BookingFinanceService _finance;
         private readonly IEmailQueue _emailQueue;
-        private readonly IHubContext<ChatHub> _hubContext;
+        private readonly Notifier _notifier;
 
-        public HostBookingsController(AppDbContext context, BookingFinanceService finance, IEmailQueue emailQueue, IHubContext<ChatHub> hubContext)
+        public HostBookingsController(AppDbContext context, BookingFinanceService finance, IEmailQueue emailQueue, Notifier notifier)
         {
             _context = context;
             _finance = finance;
             _emailQueue = emailQueue;
-            _hubContext = hubContext;
+            _notifier = notifier;
         }
 
         [HttpGet]
@@ -118,11 +118,8 @@ namespace Shortlet.Api.Controllers
                        $"<h2>Check-in code: {booking.CheckInCode}</h2><p>Show this code to security on arrival.</p>"
             });
 
-            await _hubContext.Clients.Group(booking.GuestId.ToString()).SendAsync("ReceiveNotification", new
-            {
-                title = "Booking Accepted! 🎉",
-                message = $"Your stay at {booking.Property.Title} was just approved. Check your trips for the gate code!"
-            });
+            await _notifier.NotifyAsync(booking.GuestId, "Booking accepted 🎉",
+                $"Your stay at {booking.Property.Title} is confirmed. Your check-in code is in My Trips.", "/my-trips");
 
             return Ok(new { message = "Booking Confirmed!", code = booking.CheckInCode });
         }
@@ -140,13 +137,7 @@ namespace Shortlet.Api.Controllers
 
             var allAccepted = await _finance.CancelAndRefundAsync(
                 booking.Id, "rejected", "Host declined the booking",
-                $"Your host couldn't accept your dates for {booking.Property.Title}.");
-
-            await _hubContext.Clients.Group(booking.GuestId.ToString()).SendAsync("ReceiveNotification", new
-            {
-                title = "Booking Declined",
-                message = $"The host couldn't accept your dates for {booking.Property.Title}. Any payment is being refunded."
-            });
+                $"Your host couldn't accept your dates for {booking.Property.Title}."); // also notifies the guest
 
             return Ok(new
             {
@@ -200,15 +191,7 @@ namespace Shortlet.Api.Controllers
             if (reason.Length < 10) return BadRequest(new { message = "Describe the damage (at least 10 characters) so the guest knows why." });
             if (reason.Length > 500) return BadRequest(new { message = "Keep the reason under 500 characters." });
 
-            var (ok, message) = await _finance.ResolveCautionAsync(booking.Id, request.Amount, reason);
-            if (ok)
-            {
-                await _hubContext.Clients.Group(booking.GuestId.ToString()).SendAsync("ReceiveNotification", new
-                {
-                    title = "Caution fee update",
-                    message = $"Your host kept ₦{request.Amount:N0} of your caution fee for {booking.Property.Title}."
-                });
-            }
+            var (ok, message) = await _finance.ResolveCautionAsync(booking.Id, request.Amount, reason); // notifies the guest
             return ok ? Ok(new { message }) : BadRequest(new { message });
         }
     }

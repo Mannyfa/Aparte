@@ -24,5 +24,6 @@ namespace Shortlet.Core.DTOs
         public Guid UserId { get; set; }
         public string Name { get; set; } = string.Empty;
         public string Role { get; set; } = string.Empty;
+        public bool EmailConfirmed { get; set; }
     }
 }

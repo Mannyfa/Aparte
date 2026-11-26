@@ -27,6 +27,21 @@ namespace Shortlet.Api.Helpers
                 (b.Status == "split_pending" && context.SplitGroups.Any(sg => sg.BookingId == b.Id && sg.ExpiresAt > utcNow)));
         }
 
+        /// <summary>
+        /// Host-blocked and externally-imported ranges (calendar rows without a booking) overlapping the stay.
+        /// Booking mirrors are excluded because the bookings themselves are checked separately.
+        /// </summary>
+        public static IQueryable<PropertyCalendar> BlocksOverlapping(AppDbContext context, DateTime checkIn, DateTime checkOut) =>
+            context.PropertyCalendars.Where(c => c.BookingId == null && c.StartDate < checkOut && c.EndDate > checkIn);
+
+        /// <summary>Ids of properties that can't take a stay from <paramref name="checkIn"/> to <paramref name="checkOut"/>.</summary>
+        public static IQueryable<Guid> UnavailablePropertyIds(AppDbContext context, DateTime checkIn, DateTime checkOut, DateTime utcNow) =>
+            context.Bookings
+                .Where(b => b.CheckIn < checkOut && b.CheckOut > checkIn)
+                .BlockingDates(context, utcNow)
+                .Select(b => b.PropertyId)
+                .Union(BlocksOverlapping(context, checkIn, checkOut).Select(c => c.PropertyId));
+
         /// <summary>Dates are stored as UTC midnight so a calendar day never shifts with the user's time zone.</summary>
         public static DateTime ToUtcDate(DateTime value) => DateTime.SpecifyKind(value.Date, DateTimeKind.Utc);
 

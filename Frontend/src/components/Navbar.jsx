@@ -4,6 +4,7 @@ import { Menu, X, LogOut } from 'lucide-react';
 import { AuthContext } from '../context/AuthContext';
 import { Logo } from './ui';
 import { initials } from '../utils/format';
+import NotificationsToggle from './NotificationsToggle';
 
 const sectionLinks = [
   { href: '/#stays', label: 'Stays' },
@@ -73,6 +74,7 @@ export default function Navbar() {
                 </span>
                 <span className="max-w-[9rem] truncate">{user?.name}</span>
               </span>
+              <NotificationsToggle />
               <button onClick={handleLogout} className="btn-ghost btn-sm" aria-label="Log out">
                 <LogOut size={14} /> Log out
               </button>
@@ -105,7 +107,10 @@ export default function Navbar() {
             ))}
             <div className="mt-4 flex gap-2 pb-2">
               {isAuthenticated ? (
-                <button onClick={handleLogout} className="btn-outline flex-1"><LogOut size={14} /> Log out</button>
+                <>
+                  <NotificationsToggle withLabel />
+                  <button onClick={handleLogout} className="btn-outline flex-1"><LogOut size={14} /> Log out</button>
+                </>
               ) : (
                 <>
                   <Link to="/login" onClick={() => setOpen(false)} className="btn-outline flex-1">Log in</Link>

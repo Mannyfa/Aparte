@@ -83,8 +83,10 @@
 .react-datepicker__day-name { color: #8C8A78 !important; font-family: 'Geist Mono', monospace; font-size: 11px; }
 .react-datepicker__day { border-radius: 8px !important; color: #16160F; }
 .react-datepicker__day:hover { background: #E8E6DC !important; }
-.react-datepicker__day--selected, .react-datepicker__day--in-range, .react-datepicker__day--in-selecting-range,
-.react-datepicker__day--keyboard-selected { background: #16160F !important; color: #D4F24A !important; }
+.react-datepicker__day--selected, .react-datepicker__day--in-range, .react-datepicker__day--in-selecting-range { background: #16160F !important; color: #D4F24A !important; }
+/* Keyboard focus (and "today" before anything is picked): a quiet outline, never mistaken for a selected or booked day */
+.react-datepicker__day--keyboard-selected:not(.react-datepicker__day--selected):not(.react-datepicker__day--in-range):not(.react-datepicker__day--in-selecting-range) { background: transparent !important; color: inherit !important; box-shadow: inset 0 0 0 1px #8C8A78; }
+.react-datepicker__day--today { font-weight: 600; }
 .react-datepicker__day--in-range:not(.react-datepicker__day--range-start):not(.react-datepicker__day--range-end) { background: #EEF9C2 !important; color: #16160F !important; }
 .react-datepicker__day--disabled { color: #C4C2B4 !important; text-decoration: line-through; }
 .react-datepicker__triangle { display: none; }
@@ -124,3 +126,19 @@
   html, body { overscroll-behavior-y: none; }
 }
 html { -webkit-tap-highlight-color: transparent; }
+
+/* Host calendar (react-datepicker inline): booked / blocked / imported nights */
+.host-calendar .react-datepicker { box-shadow: none; border: 0 !important; background: transparent !important; display: flex; flex-wrap: wrap; gap: 8px; }
+.host-calendar .react-datepicker__month-container { float: none; }
+.host-calendar .react-datepicker__header { border-radius: 10px; }
+.host-calendar .react-datepicker__day { width: 2.1rem; line-height: 2.1rem; margin: 0.12rem; }
+.host-calendar .react-datepicker__day--highlighted.hc-booked,
+.host-calendar .hc-booked { background: #16160F !important; color: #F2F1EA !important; text-decoration: none !important; }
+.host-calendar .hc-host { background: #FCD34D !important; color: #16160F !important; }
+.host-calendar .hc-feed { background: #7DD3FC !important; color: #16160F !important; }
+
+/* Horizontally scrolling strips (dashboard tabs on phones): scroll without a visible bar */
+@layer utilities {
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+}

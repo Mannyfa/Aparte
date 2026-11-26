@@ -1,16 +1,21 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { Calendar, MapPin, KeyRound, Luggage, ArrowRight, Sparkles, ImageOff, Lock } from 'lucide-react';
+import { Calendar, MapPin, KeyRound, Luggage, ArrowRight, Sparkles, ImageOff, Lock, X, Star } from 'lucide-react';
 import toast from 'react-hot-toast';
 import api, { errorMessage } from '../utils/api';
+import { invalidate } from '../utils/cache';
 import { AuthContext } from '../context/AuthContext';
-import { EmptyState, StatusBadge, CautionChip } from '../components/ui';
+import { EmptyState, StatusBadge, CautionChip, Modal, Row } from '../components/ui';
 import { TripGridSkeleton } from '../components/Skeletons';
-import { naira, formatDay, nightsBetween, img } from '../utils/format';
+import { naira, formatDay, formatDateTime, nightsBetween, img } from '../utils/format';
 
 const UPCOMING = ['pending', 'split_pending', 'paid', 'confirmed'];
+const checkInMoment = (trip) => new Date(new Date(trip.checkIn).getTime() + 13 * 3600 * 1000); // 2pm Lagos
 
-function TripCard({ trip }) {
+const canCancel = (trip) => UPCOMING.includes(trip.status) && Date.now() < checkInMoment(trip).getTime();
+const canReview = (trip) => (trip.status === 'confirmed' || trip.status === 'completed') && !trip.hasReviewed && Date.now() >= checkInMoment(trip).getTime();
+
+function TripCard({ trip, onCancel, onReview }) {
   const nights = nightsBetween(trip.checkIn, trip.checkOut);
   return (
     <article className="card flex flex-col overflow-hidden">
@@ -76,9 +81,127 @@ function TripCard({ trip }) {
               <span className="mono">{naira(trip.totalPrice)}</span>
             </div>
           )}
+
+          {(canCancel(trip) || canReview(trip)) && (
+            <div className="mt-3 flex gap-2">
+              {canReview(trip) && <button onClick={() => onReview(trip)} className="btn-lime btn-sm flex-1"><Star size={13} /> Leave a review</button>}
+              {canCancel(trip) && <button onClick={() => onCancel(trip)} className="btn-ghost btn-sm flex-1 text-red-700 hover:bg-red-50">Cancel booking</button>}
+            </div>
+          )}
+          {trip.hasReviewed && <p className="mt-3 text-center text-xs text-faint">Thanks for your review ★</p>}
         </div>
       </div>
     </article>
+  );
+}
+
+function CancelModal({ trip, onClose, onDone }) {
+  const [quote, setQuote] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!trip) return;
+    let cancelled = false;
+    api.get(`/Bookings/${trip.id}/cancellation-quote`)
+      .then((r) => { if (!cancelled) setQuote(r.data); })
+      .catch((e) => { if (!cancelled) { toast.error(errorMessage(e, "Couldn't check the cancellation policy.")); onClose(); } });
+    return () => { cancelled = true; };
+  }, [trip, onClose]);
+
+  const confirm = async () => {
+    setBusy(true);
+    try {
+      const res = await api.post(`/Bookings/${trip.id}/cancel`);
+      toast.success(res.data?.message || 'Booking cancelled.');
+      onDone();
+    } catch (e) {
+      toast.error(errorMessage(e, "Couldn't cancel this booking."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={!!trip} onClose={onClose} title="Cancel booking">
+      <div className="p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-light tracking-[-0.02em]">Cancel this booking?</h3>
+          <button onClick={onClose} className="btn-ghost btn-sm -mr-2" aria-label="Close"><X size={16} /></button>
+        </div>
+        <p className="mb-4 text-sm text-muted">{trip?.propertyTitle} · {trip && `${formatDay(trip.checkIn)} → ${formatDay(trip.checkOut)}`}</p>
+
+        {!quote ? (
+          <div className="space-y-2" aria-hidden="true"><div className="skeleton h-4 w-full" /><div className="skeleton h-4 w-2/3" /><div className="skeleton h-10 w-full" /></div>
+        ) : !quote.allowed ? (
+          <p className="rounded-xl bg-sand/70 p-4 text-sm">{quote.reason}</p>
+        ) : (
+          <>
+            <div className="space-y-2 rounded-xl bg-sand/70 p-4">
+              {quote.fullRefund ? (
+                <p className="text-sm">{quote.paidSoFar > 0 ? 'You get a full refund.' : 'Nothing has been paid yet, so there’s nothing to refund.'}</p>
+              ) : (
+                <>
+                  <Row label="Paid" value={naira(quote.paidSoFar)} />
+                  <Row label="Kept by host (half the room rate)" value={`− ${naira(quote.keptByHost)}`} />
+                  <Row label="Service fee (non-refundable)" value={`− ${naira(quote.feeKept)}`} />
+                </>
+              )}
+              {quote.paidSoFar > 0 && <Row label="Refund to you" value={naira(quote.refundToGuest)} strong className="border-t border-line pt-2" />}
+            </div>
+            <p className="hint">
+              Free cancellation until {formatDateTime(quote.freeCancellationUntil)} ({quote.freeCancellationHours} hours before check-in).
+              Refunds go back to your card or account, usually within 5–10 working days.
+            </p>
+            <button onClick={confirm} disabled={busy} className="btn-danger btn-lg mt-5 w-full">{busy ? 'Cancelling…' : 'Cancel booking'}</button>
+            <button onClick={onClose} className="btn-ghost btn-lg mt-2 w-full">Keep my booking</button>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function ReviewModal({ trip, onClose, onDone }) {
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api.post('/Reviews', { propertyId: trip.propertyId, rating, comment: comment.trim() });
+      toast.success('Thanks! Your review is live.');
+      invalidate(`/Reviews/property/${trip.propertyId}`);
+      invalidate(`/Properties/${trip.propertyId}`);
+      onDone();
+    } catch (err) {
+      toast.error(errorMessage(err, "Couldn't post your review."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={!!trip} onClose={onClose} title="Leave a review">
+      <form onSubmit={submit} className="p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-light tracking-[-0.02em]">How was {trip?.propertyTitle}?</h3>
+          <button type="button" onClick={onClose} className="btn-ghost btn-sm -mr-2" aria-label="Close"><X size={16} /></button>
+        </div>
+        <div className="mb-4 flex gap-1" role="radiogroup" aria-label="Rating">
+          {[1, 2, 3, 4, 5].map((n) => (
+            <button key={n} type="button" role="radio" aria-checked={rating === n} aria-label={`${n} star${n > 1 ? 's' : ''}`}
+              onClick={() => setRating(n)} className={`text-3xl leading-none transition-colors ${n <= rating ? 'text-lime-deep' : 'text-line hover:text-faint'}`}>★</button>
+          ))}
+        </div>
+        <label htmlFor="review-comment" className="label">Tell other guests about it <span className="font-normal text-faint">(optional)</span></label>
+        <textarea id="review-comment" rows="4" maxLength={2000} value={comment} onChange={(e) => setComment(e.target.value)}
+          className="input" placeholder="Cleanliness, power, security, how the host was…" />
+        <p className="hint">Shown on the listing with your first name and last initial.</p>
+        <button type="submit" disabled={busy} className="btn-ink btn-lg mt-5 w-full">{busy ? 'Posting…' : 'Post review'}</button>
+      </form>
+    </Modal>
   );
 }
 
@@ -87,8 +210,21 @@ export default function MyTrips() {
   const [trips, setTrips] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('upcoming');
+  const [cancelTrip, setCancelTrip] = useState(null);
+  const [reviewTrip, setReviewTrip] = useState(null);
   const { isAuthenticated, user } = useContext(AuthContext);
   const navigate = useNavigate();
+
+  const fetchTrips = useCallback(async () => {
+    try {
+      const response = await api.get('/Bookings/guest');
+      setTrips(response.data);
+    } catch (error) {
+      toast.error(errorMessage(error, 'Failed to load your trips.'));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) { navigate('/login', { state: { from: '/my-trips' } }); return; }
@@ -99,19 +235,10 @@ export default function MyTrips() {
       toast.success('Payment received. Your host will confirm shortly.', { duration: 5000, id: 'paystack-return' });
       setSearchParams({}, { replace: true });
     }
-
-    const fetchTrips = async () => {
-      try {
-        const response = await api.get('/Bookings/guest');
-        setTrips(response.data);
-      } catch (error) {
-        toast.error(errorMessage(error, 'Failed to load your trips.'));
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchTrips();
-  }, [isAuthenticated, user, navigate, searchParams, setSearchParams]);
+  }, [isAuthenticated, user, navigate, searchParams, setSearchParams, fetchTrips]);
+
+  const closeCancel = useCallback(() => setCancelTrip(null), []);
 
   if (!isAuthenticated || user?.role === 'host') return null;
 
@@ -119,6 +246,7 @@ export default function MyTrips() {
   const upcoming = trips.filter((t) => UPCOMING.includes(t.status) && new Date(t.checkOut) >= today);
   const past = trips.filter((t) => !upcoming.includes(t));
   const shown = tab === 'upcoming' ? upcoming : past;
+  const toReview = past.filter(canReview).length + upcoming.filter(canReview).length;
 
   return (
     <div className="page pb-24 pt-10">
@@ -130,7 +258,7 @@ export default function MyTrips() {
         </div>
         <div className="segmented self-start md:self-auto">
           <button aria-pressed={tab === 'upcoming'} onClick={() => setTab('upcoming')}>Upcoming · {upcoming.length}</button>
-          <button aria-pressed={tab === 'past'} onClick={() => setTab('past')}>Past · {past.length}</button>
+          <button aria-pressed={tab === 'past'} onClick={() => setTab('past')}>Past · {past.length}{toReview > 0 ? ' ★' : ''}</button>
         </div>
       </div>
 
@@ -146,9 +274,12 @@ export default function MyTrips() {
         </EmptyState>
       ) : (
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {shown.map((trip) => <TripCard key={trip.id} trip={trip} />)}
+          {shown.map((trip) => <TripCard key={trip.id} trip={trip} onCancel={setCancelTrip} onReview={setReviewTrip} />)}
         </div>
       )}
+
+      {cancelTrip && <CancelModal trip={cancelTrip} onClose={closeCancel} onDone={() => { setCancelTrip(null); invalidate('/Properties'); fetchTrips(); }} />}
+      {reviewTrip && <ReviewModal trip={reviewTrip} onClose={() => setReviewTrip(null)} onDone={() => { setReviewTrip(null); fetchTrips(); }} />}
     </div>
   );
 }

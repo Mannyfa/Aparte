@@ -75,7 +75,8 @@ namespace Shortlet.Infrastructure.Services
             Token = GenerateJwtToken(user),
             UserId = user.Id,
             Name = user.Name,
-            Role = user.Role.ToLowerInvariant()
+            Role = user.Role.ToLowerInvariant(),
+            EmailConfirmed = user.EmailConfirmed
         };
 
         private string GenerateJwtToken(User user)

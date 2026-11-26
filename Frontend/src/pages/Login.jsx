@@ -20,7 +20,7 @@ export default function Login() {
     setLoading(true);
     try {
       const { data } = await api.post('/Auth/login', { email, password });
-      login({ id: data.userId, name: data.name, role: data.role }, data.token);
+      login({ id: data.userId, name: data.name, role: data.role, emailConfirmed: data.emailConfirmed }, data.token);
       toast.success(`Welcome back, ${data.name.split(' ')[0]}!`);
 
       // Return to the page that sent them here (e.g. a listing), otherwise their home base.
@@ -48,7 +48,10 @@ export default function Login() {
             value={email} onChange={(e) => setEmail(e.target.value)} />
         </div>
         <div>
-          <label htmlFor="password" className="label">Password</label>
+          <div className="flex items-baseline justify-between">
+            <label htmlFor="password" className="label">Password</label>
+            <Link to="/forgot-password" className="text-xs text-muted underline-offset-4 hover:text-ink hover:underline">Forgot password?</Link>
+          </div>
           <input id="password" type="password" required autoComplete="current-password" className="input" placeholder="••••••••"
             value={password} onChange={(e) => setPassword(e.target.value)} />
         </div>
